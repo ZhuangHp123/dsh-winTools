@@ -1,0 +1,16 @@
+{
+  "name": "dsh-wintools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows 启动器：热键唤起、应用启动、文件搜索、剪贴板历史",
+  "main": "src/main/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "test:watch": "node --test --watch \"test/*.test.js\""
+  },
+  "devDependencies": {
+    "electron": "^45.3.4"
+  }
+}

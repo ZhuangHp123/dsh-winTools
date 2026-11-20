@@ -1,0 +1,220 @@
+:root {
+  --bg: rgba(24, 24, 32, 0.96);
+  --bg-row: transparent;
+  --bg-row-hover: rgba(255, 255, 255, 0.06);
+  --bg-row-active: rgba(72, 132, 255, 0.22);
+  --fg: #ececf2;
+  --fg-dim: #9a9aab;
+  --fg-faint: #6b6b7c;
+  --accent: #4884ff;
+  --border: rgba(255, 255, 255, 0.08);
+  --radius: 12px;
+  --font: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* hidden 属性被 display:flex 之类的类规则覆盖是常见坑，这里强制生效。 */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.launcher {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  overflow: hidden;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.search-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--fg-faint);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+#query {
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 17px;
+  font-family: var(--font);
+  caret-color: var(--accent);
+}
+
+#query::placeholder {
+  color: var(--fg-faint);
+}
+
+.mode-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(72, 132, 255, 0.14);
+  border: 1px solid rgba(72, 132, 255, 0.3);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.results::-webkit-scrollbar {
+  width: 8px;
+}
+.results::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: default;
+  user-select: none;
+}
+
+.row.active {
+  background: var(--bg-row-active);
+}
+
+.row:hover {
+  background: var(--bg-row-hover);
+}
+
+.row.active:hover {
+  background: var(--bg-row-active);
+}
+
+.kind-tag {
+  flex: 0 0 auto;
+  width: 34px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 18px;
+  border-radius: 5px;
+  color: var(--fg-dim);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.kind-tag.app {
+  color: #7fb0ff;
+  background: rgba(72, 132, 255, 0.14);
+}
+.kind-tag.file {
+  color: #7fe0b0;
+  background: rgba(60, 200, 140, 0.14);
+}
+.kind-tag.clipboard {
+  color: #ffcf7f;
+  background: rgba(255, 180, 60, 0.14);
+}
+
+.row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row-title {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-sub {
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.row-pin {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #ffcf7f;
+}
+
+.empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-faint);
+  font-size: 13px;
+  padding: 20px;
+  text-align: center;
+  line-height: 1.7;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-faint);
+  flex: 0 0 auto;
+  min-height: 28px;
+}
+
+.status-left,
+.status-right {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-right {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+}
+
+.status-left.warn {
+  color: #ffb84d;
+}
