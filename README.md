@@ -27,16 +27,33 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 | 操作 | 说明 |
 | --- | --- |
 | `Alt+Space` | 唤起/隐藏（被占用时会自动退到 `Alt+Shift+Space` → `Ctrl+Shift+Space` → ``Alt+` ``） |
-| 直接输入 | 应用 + 文件 + 剪贴板一起搜，应用优先 |
-| `文件 xxx` | 锁定只搜文件（`应用` / `剪贴板` / `apps` / `clip` 同理） |
+| 直接输入 | 应用 + 项目 + 文件 + 剪贴板一起搜，应用优先 |
+| `项目 xxx` | 锁定只搜 IDE 项目（`应用` / `文件` / `剪贴板` / `apps` / `clip` 同理） |
+| `文件 xxx` | 锁定只搜文件 |
 | `~ xxx` | 快捷锁定剪贴板 |
 | `↑` `↓` / `Tab` | 上下移动 |
-| `Enter` | 执行：打开应用、打开文件、把剪贴板内容写回剪贴板 |
+| `Enter` | 执行：打开应用、用 IDEA 打开项目、打开文件、把剪贴板内容写回剪贴板 |
 | `Esc` | 清空输入；已为空时隐藏窗口 |
 | 托盘图标 | 显示搜索 / 重新索引文件 / 退出 |
 
 热键可通过 `%APPDATA%\dsh-wintools\config.json` 的 `hotkey` 字段或环境变量
 `DSH_HOTKEY` 指定，例如 `{ "hotkey": "Ctrl+Alt+K" }`。
+
+### 项目（IDEA）
+
+项目来源：IDEA 的最近项目列表（`%APPDATA%\JetBrains\IntelliJIdea*\options\recentProjects.xml`）
+加上配置根目录下带 `.idea` 的目录，合并去重。默认扫描
+`%USERPROFILE%\IdeaProjects`、`D:\cfDev`、`D:\code`、`D:\dev`、`D:\projects`、`D:\workspace`。
+
+```json
+{
+  "projectRoots": ["D:\\cfDev", "D:\\IdeaProjects"],
+  "ideaPath": "D:\\IntelliJ IDEA 2026.2.3\\bin\\idea64.exe"
+}
+```
+
+两个字段都可省略：`projectRoots` 省略用默认目录，`ideaPath` 省略时自动在
+`Program Files\JetBrains`、`%LOCALAPPDATA%\Programs`、Toolbox 和盘符根目录下找。
 
 ## 数据位置
 
@@ -58,6 +75,7 @@ src/
 │   ├── rank.js       排序（匹配分 + frecency + provider 权重）
 │   └── usage.js      使用频次存储
 ├── apps/          开始菜单 .lnk 扫描与启动
+├── projects/      IDE 项目发现与用 IDEA 打开
 ├── files/         文件索引（缓存式，worker 后台扫盘）
 ├── clipboard/     剪贴板历史（轮询，去重，置顶）
 ├── main/          Electron 主进程
@@ -79,6 +97,8 @@ test/             node:test 单元测试
   engine 对每个 provider 独立超时（1.5s），慢的不拖累快的；后用发起的查询作废前一轮结果。
 - **文件索引**：启动先用缓存，同时在 worker 线程扫盘（桌面/文档/下载优先，再整盘，
   默认排除 `node_modules`/`.git`/`AppData` 等）。本机约 3.8 万文件、几秒完成。
+- **项目**：启动时同步扫描（本机 5ms），来源为 IDEA 最近项目列表 + 带 `.idea`
+  的目录；回车 `idea64.exe <路径>`，detached 启动，IDE 生命周期不挂在启动器上。
 - **剪贴板**：Electron 没有剪贴板变更事件，只能轮询（600ms）。Electron 45 的
   `clipboard.readText()` 返回 Promise，轮询器对同步/异步两种返回都支持。
 - **安全**：渲染进程 `contextIsolation: true` + `nodeIntegration: false`；

@@ -14,8 +14,8 @@ const modeEl = document.getElementById('mode');
 const statusLeft = document.getElementById('status-left');
 const statusRight = document.getElementById('status-right');
 
-const KIND_LABEL = { app: '应用', file: '文件', clipboard: '剪贴板' };
-const KIND_ORDER = { app: 0, file: 1, clipboard: 2 };
+const KIND_LABEL = { app: '应用', project: '项目', file: '文件', clipboard: '剪贴板' };
+const KIND_ORDER = { app: 0, project: 1, file: 2, clipboard: 3 };
 
 let items = [];
 let activeIndex = -1;
@@ -117,7 +117,7 @@ function scrollActiveIntoView() {
 function renderEmpty(query) {
   if (items.length > 0) return;
   if (!query.trim()) {
-    emptyEl.textContent = '输入关键字开始搜索；应用/文件/剪贴板 可锁定搜索范围';
+    emptyEl.textContent = '输入关键字开始搜索；应用/项目/文件/剪贴板 可锁定搜索范围';
   } else if (status.indexing) {
     emptyEl.textContent = '没有匹配结果（文件索引仍在构建中，稍后再试）';
   } else {
@@ -136,6 +136,7 @@ function renderStatus() {
   } else if (status.fileCount > 0) {
     parts.push(`${status.fileCount.toLocaleString('zh-CN')} 个文件`);
   }
+  if (status.projectCount > 0) parts.push(`项目 ${status.projectCount}`);
   if (status.clipboardCount > 0) parts.push(`剪贴板 ${status.clipboardCount}`);
 
   const errors = Array.isArray(status.errors) ? status.errors : [];

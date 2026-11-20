@@ -23,6 +23,7 @@ const USAGE_LIMIT = 120;
 /** 每类 provider 的基础权重，决定不同来源混排时谁优先。 */
 const DEFAULT_PROVIDER_WEIGHT = {
   app: 60,
+  project: 50,
   file: 0,
   clipboard: -20,
   calc: 200,

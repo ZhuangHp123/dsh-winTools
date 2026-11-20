@@ -80,6 +80,11 @@ async function run({ app, win, query }) {
   await shot('smoke-scoped.png');
   console.log('[smoke] 锁定文件', JSON.stringify(await readRows()));
 
+  // 项目 provider：只搜不执行（打开 IDE 会弹窗，不适合放进自动冒烟）。
+  await type('项目 ' + (process.env.DSH_SMOKE_PROJECT || 'cfmoto'));
+  await shot('smoke-project.png');
+  console.log('[smoke] 锁定项目', JSON.stringify(await readRows()));
+
   // 剪贴板：写入一段带唯一标记的文字，等轮询记录后再搜、再执行。
   const marker = `smoke-clip-${Date.now().toString(36)}`;
   const { clipboard } = require('electron');

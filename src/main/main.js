@@ -23,6 +23,7 @@ const { createUsageStore, attachPersistence } = require('../core/usage');
 const { createAppProvider } = require('../apps/appProvider');
 const { createFileProvider, scanRoots, defaultRoots } = require('../files/fileProvider');
 const { createClipboardProvider } = require('../clipboard/clipboardProvider');
+const { createProjectProvider, defaultProjectRoots } = require('../projects/projectProvider');
 
 const { createJsonCache } = require('./persistence');
 const { createWorkerScan } = require('./workerScan');
@@ -39,6 +40,7 @@ let tray = null;
 let engine = null;
 let fileProvider = null;
 let clipboardProvider = null;
+let projectProvider = null;
 let usagePersist = null;
 let registeredHotkey = null;
 let isQuitting = false;
@@ -226,12 +228,22 @@ function buildProviders() {
 
   const appProvider = createAppProvider();
 
+  projectProvider = createProjectProvider({
+    // config.json 可选覆盖：projectRoots（数组）、ideaPath（字符串）
+    roots: () =>
+      Array.isArray(config.projectRoots) && config.projectRoots.length > 0
+        ? config.projectRoots
+        : defaultProjectRoots(),
+    ideaPath: typeof config.ideaPath === 'string' ? config.ideaPath : undefined,
+  });
+
   engine = createEngine({
     usageStore,
     limit: 9,
     providerTimeout: 1500, // 文件检索是内存里的扫描，1.5 秒足够兜住慢盘
   });
   engine.register(appProvider);
+  engine.register(projectProvider);
   engine.register(fileProvider);
   engine.register(clipboardProvider);
   return engine;
@@ -277,6 +289,7 @@ function collectStatus() {
     fileCount: stats.count ?? 0,
     clipboardCount: clipboardProvider?.stats?.().history ?? 0,
     appCount: engine?.get('app')?.stats?.()?.shortcutCount ?? 0,
+    projectCount: projectProvider?.stats?.().count ?? 0,
     trayAvailable: Boolean(tray),
     userData: app.getPath('userData'),
   };

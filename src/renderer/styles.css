@@ -141,6 +141,10 @@ body {
   color: #7fb0ff;
   background: rgba(72, 132, 255, 0.14);
 }
+.kind-tag.project {
+  color: #c9a2ff;
+  background: rgba(150, 90, 255, 0.14);
+}
 .kind-tag.file {
   color: #7fe0b0;
   background: rgba(60, 200, 140, 0.14);
