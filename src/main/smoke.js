@@ -42,6 +42,8 @@ async function run({ app, win, query }) {
           rows: rows.map((row) => ({
             kind: row.querySelector('.kind-tag')?.textContent,
             avatar: row.querySelector('.row-avatar')?.textContent,
+            // 真人头像是 <img src="data:...">，首字色块是纯文本
+            avatarImage: Boolean(row.querySelector('.row-avatar img')?.src),
             title: row.querySelector('.row-title')?.textContent,
             sub: row.querySelector('.row-sub')?.textContent,
             active: row.classList.contains('active'),

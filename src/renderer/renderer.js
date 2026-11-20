@@ -28,6 +28,8 @@ const KIND_ORDER = { app: 0, project: 1, web: 2, contact: 3, doc: 4, file: 5, cl
 let items = [];
 let activeIndex = -1;
 let searchToken = 0;
+/** 结果 id → 头像占位元素，补图回来后原地替换。 */
+let pendingAvatars = new Map();
 let status = { indexing: false, fileCount: 0, errors: [] };
 let debounceTimer = null;
 
@@ -69,6 +71,7 @@ function renderMode(hint) {
 
 function renderResults() {
   resultsEl.textContent = '';
+  pendingAvatars = new Map();
   if (items.length === 0) {
     resultsEl.hidden = true;
     emptyEl.hidden = false;
@@ -87,10 +90,18 @@ function renderResults() {
 
     const kind = item.kind ?? item.provider ?? '';
     const lead = document.createElement('span');
-    if (item.initials) {
-      // 联系人用首字色块当头像（拿不到真人头像 URL），顶掉左边的类别标签。
+    if (item.avatar) {
+      lead.className = 'row-avatar';
+      const img = document.createElement('img');
+      img.src = item.avatar;
+      img.alt = '';
+      img.draggable = false;
+      lead.appendChild(img);
+    } else if (item.initials) {
+      // 真头像还没拿到时先用首字色块占位；补图回来会原地替换。
       lead.className = `row-avatar av-${avatarTone(item.initials)}`;
       lead.textContent = item.initials;
+      if (item.avatarPending) pendingAvatars.set(item.id, lead);
     } else {
       lead.className = `kind-tag ${escapeHtml(kind)}`;
       lead.textContent = KIND_LABEL[kind] ?? kind.slice(0, 2);
@@ -125,6 +136,32 @@ function renderResults() {
   });
   resultsEl.appendChild(frag);
   scrollActiveIntoView();
+  fillPendingAvatars();
+}
+
+/**
+ * 缺图的联系人按顺序异步补，同一轮搜索只发一次请求。
+ * 补回来时如果那个元素还在 DOM 里（没被下一轮搜索清掉）就原地换成 <img>。
+ */
+function fillPendingAvatars() {
+  if (pendingAvatars.size === 0) return;
+  const token = searchToken;
+  for (const [id, node] of pendingAvatars) {
+    window.launcher
+      .avatar(id)
+      .then((result) => {
+        if (token !== searchToken || !result?.avatar) return;
+        if (!node.isConnected) return;
+        node.className = 'row-avatar';
+        node.textContent = '';
+        const img = document.createElement('img');
+        img.src = result.avatar;
+        img.alt = '';
+        img.draggable = false;
+        node.appendChild(img);
+      })
+      .catch(() => {});
+  }
 }
 
 function setActive(index) {

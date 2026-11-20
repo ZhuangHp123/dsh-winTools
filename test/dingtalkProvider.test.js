@@ -377,6 +377,19 @@ test('联系人 provider：本地索引命中时优先于 MCP，且不带 server
   assert.equal(items[0].serverMatched, undefined);
 });
 
+test('联系人 provider：本地条目的 avatarId 会带到候选项上，供界面取头像', async () => {
+  const provider = createContactProvider({
+    cache: { load: async () => null },
+    loadLocal: () => ({
+      selfUid: '1000000001',
+      people: [{ uid: '2000000002', name: '张三丰', dept: '示例科技有限公司', avatarId: 'sampleAvatarMediaId' }],
+    }),
+  });
+  await provider.init();
+  const items = await provider.search(['张']);
+  assert.equal(items[0].avatarId, 'sampleAvatarMediaId');
+});
+
 test('联系人 provider：本地有 uid 时用 cid 直跳，不再驱动搜索面板', async () => {
   const byUid = [];
   const byName = [];
@@ -524,6 +537,53 @@ test('文档 provider：缓存命中时不打网络，锁定搜索原样收录�
   assert.equal(remote[0].title, '接口卡清单');
   assert.equal(remote[0].serverMatched, true);
   assert.ok(fetch.calls.length > 0);
+});
+
+test('文档 provider：远程搜到的结果在普通搜索里也能凭关键词找回', async () => {
+  const fetch = fakeFetch((n, body) => {
+    if (body.method === 'initialize') return jsonResponse({ jsonrpc: '2.0', id: body.id, result: {} });
+    if (body.method === 'notifications/initialized') return jsonResponse({});
+    // 正文命中：标题里没有“库存”这两个字
+    return jsonResponse({
+      jsonrpc: '2.0',
+      id: body.id,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              documents: [{ name: '接口卡清单', docUrl: 'https://alidocs.dingtalk.com/i/nodes/k' }],
+            }),
+          },
+        ],
+      },
+    });
+  });
+  const saved = [];
+  const provider = createDocumentProvider({
+    mcpUrl: 'https://mcp-gw.example/docs',
+    openExternal: async () => {},
+    cache: { load: async () => null, save: async (data) => saved.push(data) },
+    fetch,
+  });
+  await provider.init();
+
+  await provider.search(['库存'], { query: { keyword: '库存', providerHint: 'dingdoc' } });
+  await provider.dispose();
+
+  // 下次启动：只用缓存，不许联网
+  const offline = createDocumentProvider({
+    mcpUrl: 'https://mcp-gw.example/docs',
+    openExternal: async () => {},
+    cache: { load: async () => saved[saved.length - 1] },
+    fetch: async () => assert.fail('普通搜索不该联网'),
+  });
+  await offline.init();
+  const hits = await offline.search(['库存'], { query: { keyword: '库存', providerHint: null } });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].title, '接口卡清单');
+  // 标题里没有关键词，必须带 serverMatched，排序层才会保底收录而不是丢掉
+  assert.equal(hits[0].serverMatched, true);
 });
 
 test('查询缓存：同一关键词 90 秒内不重复请求', async () => {

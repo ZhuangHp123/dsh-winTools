@@ -26,7 +26,7 @@ const crypto = require('node:crypto');
 const SQLITE_HEADER = 'SQLite format 3';
 const KDF_SALT = '666DingT';
 const PROFILE_QUERY =
-  "select uid, nick, alias, orgInfo from tbuser_profile_v2 where nick is not null and nick != ''";
+  "select uid, nick, alias, orgInfo, iconMediaId from tbuser_profile_v2 where nick is not null and nick != ''";
 
 /** 钉钉数据目录：%APPDATA%\DingTalk\<hash>_v3，里面要有 DBFiles。 */
 function findDataDir(root = path.join(os.homedir(), 'AppData', 'Roaming', 'DingTalk')) {
@@ -185,8 +185,9 @@ function cidFor(a, b) {
 }
 
 /**
- * 读库并整理成 { selfUid, people: [{ uid, name, alias, dept }] }。
+ * 读库并整理成 { selfUid, people: [{ uid, name, alias, dept, avatarId }] }。
  * 同名多条（重名同事）都保留，交给上层按 uid 区分展示。
+ * avatarId 是客户端的头像资源名（去掉前导 @），交给 avatars.js 找图。
  */
 function loadLocalContacts(dataDir) {
   const salt = readSalt(dataDir);
@@ -218,7 +219,8 @@ function loadLocalContacts(dataDir) {
     if (!name) continue;
     const uid = String(row.uid ?? '').trim();
     if (!uid || uid === String(selfUid)) continue;
-    people.push({ uid, name, alias: String(row.alias ?? '').trim(), dept: orgNameOf(row.orgInfo) });
+    const avatarId = String(row.iconMediaId ?? '').trim().replace(/^@/, '');
+    people.push({ uid, name, alias: String(row.alias ?? '').trim(), dept: orgNameOf(row.orgInfo), avatarId });
   }
   return { selfUid: String(selfUid), people, reason: '' };
 }

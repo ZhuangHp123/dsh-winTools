@@ -28,6 +28,7 @@ const { createChromeProvider } = require('../web/chromeProvider');
 const { createContactProvider, createDocumentProvider } = require('../dingtalk/dingtalkProvider');
 const { createChatOpener, createCidOpener } = require('../dingtalk/openChat');
 const { findDataDir, loadLocalContacts, cidFor } = require('../dingtalk/localIndex');
+const { createAvatarStore } = require('../dingtalk/avatars');
 const { createOAuthManager } = require('../dingtalk/oauth');
 
 /**
@@ -64,6 +65,7 @@ let projectProvider = null;
 let chromeProvider = null;
 let contactProvider = null;
 let documentProvider = null;
+let avatarStore = null;
 let usagePersist = null;
 let registeredHotkey = null;
 let isQuitting = false;
@@ -317,6 +319,14 @@ function buildProviders() {
     }),
   };
 
+  // 头像：客户端缓存的缩略图直接读，缺的从 CDN 后台补。
+  // 目录扫描只 stat 两百来个文件，同步做不影响启动。
+  const avatarDataDir = findDataDir();
+  avatarStore = createAvatarStore({
+    avatarDirs: avatarDataDir ? [path.join(avatarDataDir, 'AvatarFiles')] : [],
+    cacheDir: userDataPath('cache', 'dingtalk-avatars'),
+  });
+
   // 本地库解密是同步 IO（70MB 的库要几百毫秒），放进 setImmediate 里跑，
   // 免得卡住窗口首帧。
   let localContacts;
@@ -335,9 +345,18 @@ function buildProviders() {
           resolve(localContacts);
         });
       });
+      // 本地库一读完就把头像预热到磁盘：用户第一次搜人时图大多已经在本地，
+      // 不用现场等网络。只在后台跑，失败无所谓。
+      localPending
+        .then((local) => {
+          const ids = (local?.people ?? []).map((person) => person.avatarId);
+          avatarStore?.prefetch(ids).catch(() => {});
+        })
+        .catch(() => {});
     }
     return localPending;
   };
+
   const openByUid = createCidOpener();
   const openCid = async (uid) => {
     const local = await loadLocal();
@@ -447,16 +466,24 @@ function registerIpc() {
     for (const item of result.items) lastResults.set(item.id, item);
 
     return {
-      items: result.items.map((item) => ({
-        id: item.id,
-        provider: item.provider,
-        kind: item.kind,
-        title: item.title,
-        subtitle: item.subtitle,
-        initials: item.initials,
-        score: item.score,
-        pinned: item.pinned,
-      })),
+      items: result.items.map((item) => {
+        // 头像：本地缓存命中就同步带上 data URL（几 KB），没命中先留空，
+        // 由 launcher:avatar 异步补，不拖慢按键。
+        const avatar = avatarStore?.dataUrl(item.avatarId) ?? null;
+        return {
+          id: item.id,
+          provider: item.provider,
+          kind: item.kind,
+          title: item.title,
+          subtitle: item.subtitle,
+          initials: item.initials,
+          avatar,
+          // 有 avatarId 但图还没到，界面才会去要；远端联系人没有这个字段。
+          avatarPending: Boolean(item.avatarId) && !avatar,
+          score: item.score,
+          pinned: item.pinned,
+        };
+      }),
       errors: result.errors,
       query: {
         providerHint: result.query.providerHint,
@@ -475,6 +502,16 @@ function registerIpc() {
       scheduleUsageSave();
     }
     return result;
+  });
+
+  // 头像异步补图：搜索先返回文字，缺图的再单独要。
+  // 只有主进程存的 avatarId 算数，渲染进程传什么 id 都不会被当成路径用。
+  ipcMain.handle('launcher:avatar', async (_event, id) => {
+    const item = lastResults.get(id);
+    const mediaId = item?.avatarId;
+    if (!mediaId || !avatarStore) return { avatar: null };
+    await avatarStore.ensure(mediaId);
+    return { avatar: avatarStore.dataUrl(mediaId) };
   });
 
   ipcMain.handle('launcher:status', async () => collectStatus());

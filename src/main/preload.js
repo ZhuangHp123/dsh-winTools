@@ -12,6 +12,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('launcher', {
   search: (input) => ipcRenderer.invoke('launcher:search', input),
   activate: (id) => ipcRenderer.invoke('launcher:activate', { id }),
+  avatar: (id) => ipcRenderer.invoke('launcher:avatar', id),
   status: () => ipcRenderer.invoke('launcher:status'),
   hide: () => ipcRenderer.invoke('launcher:hide'),
   reindex: () => ipcRenderer.invoke('launcher:reindex'),

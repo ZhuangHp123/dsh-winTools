@@ -170,6 +170,7 @@ function contactToCandidate(contact, options = {}) {
     tags: [contact.dept, contact.userId, contact.uid].filter(Boolean),
     userId: contact.userId,
     uid: contact.uid || undefined,
+    avatarId: contact.avatarId || undefined,
     openId: contact.openId || undefined,
     serverMatched: options.serverMatched || undefined,
   };
@@ -365,9 +366,16 @@ function createDocumentProvider(options = {}) {
     });
   }
 
-  function remember(list) {
+  function remember(list, keyword) {
     const byUrl = new Map(documents.map((d) => [d.url, d]));
-    for (const doc of list) byUrl.set(doc.url, doc);
+    for (const doc of list) {
+      const existing = byUrl.get(doc.url);
+      // 服务端按正文匹配，命中的文档标题里往往没有关键词。把"搜到它的关键词"
+      // 记下来，不锁定的普通搜索才能从缓存里把它捞回来。
+      const keys = new Set(existing?.searchKeys ?? []);
+      if (keyword) keys.add(keyword);
+      byUrl.set(doc.url, { ...existing, ...doc, searchKeys: [...keys] });
+    }
     documents = [...byUrl.values()].slice(-MAX_CACHED_DOCS);
   }
 
@@ -377,7 +385,7 @@ function createDocumentProvider(options = {}) {
     const result = await client.callTool(DOC_TOOL, { keyword });
     const list = normalizeDocuments(unwrapToolResult(result));
     queryCache.set(keyword, { at: now(), list });
-    remember(list);
+    remember(list, keyword);
     return list;
   }
 
@@ -437,9 +445,17 @@ function createDocumentProvider(options = {}) {
 }
 
 function docLocalMatches(pool, terms) {
-  return pool
-    .filter((entry) => matchesTerms(terms, entry.title, entry.url))
-    .map((doc) => docToCandidate(doc));
+  const out = [];
+  for (const entry of pool) {
+    if (matchesTerms(terms, entry.title, entry.url)) {
+      out.push(docToCandidate(entry));
+    } else if (matchesTerms(terms, ...(entry.searchKeys ?? []))) {
+      // 服务端按正文命中过、标题里却没有关键词：本地模糊匹配会把它判为不匹配，
+      // 必须带 serverMatched 才能拿到排序层的保底分。
+      out.push(docToCandidate(entry, { serverMatched: true }));
+    }
+  }
+  return out;
 }
 
 module.exports = {

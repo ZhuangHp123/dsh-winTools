@@ -166,7 +166,7 @@ body {
   background: rgba(255, 180, 60, 0.14);
 }
 
-/* 联系人头像位：钉钉那边拿不到真人头像 URL，用名字首字色块，跟客户端一致。 */
+/* 联系人头像位：优先用钉钉客户端的真实头像，拿不到时退回名字首字色块。 */
 .row-avatar {
   flex: 0 0 auto;
   width: 26px;
@@ -178,6 +178,13 @@ body {
   font-weight: 600;
   letter-spacing: 0;
   color: #10151c;
+  overflow: hidden;
+}
+.row-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 .row-avatar.av-0 { background: #7fb0ff; }
 .row-avatar.av-1 { background: #7ee0d0; }
