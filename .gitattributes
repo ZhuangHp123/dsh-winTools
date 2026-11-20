@@ -1,0 +1,15 @@
+# 统一 LF 存储，检出按平台默认。
+* text=auto eol=lf
+*.mjs text eol=lf
+*.js  text eol=lf
+*.ts  text eol=lf
+*.json text eol=lf
+*.md  text eol=lf
+*.py  text eol=lf
+
+# 二进制，别让 git 试图做换行转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.exe binary
+*.zip binary

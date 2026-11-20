@@ -1,0 +1,55 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+out/
+.next/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 临时/缓存
+tmp/
+.cache/
+*.log
+*.tmp
+*.bak
+
+# 测试与覆盖率
+coverage/
+.nyc_output/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 编辑器与本地配置
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地环境变量与密钥 —— 绝不上行
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.*
+
+# 打包产物
+*.zip
+*.7z
+*.exe
+*.msi
+*.dmg
+
+# 工具链按工作区写的状态目录
+.serena/
+.memsearch/
+
+# 工程文件（按栈选用，出现即忽略）
+*.tsbuildinfo
+pnpm-error.log
