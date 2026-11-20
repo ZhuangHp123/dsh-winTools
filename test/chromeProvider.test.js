@@ -257,6 +257,15 @@ test('buildActivateScript 把 hwnd 与 index 写进脚本', () => {
   assert.match(script, /AttachThreadInput/);
 });
 
+test('buildActivateScript 只在最小化时才 SW_RESTORE，避免把最大化窗口缩回去', () => {
+  const script = buildActivateScript(1, 0);
+  assert.match(script, /IsIconic\(\$hwnd\)/, '缺少 IsIconic 判断');
+  assert.match(script, /ShowWindow\(\$hwnd, 9\)/, '最小化时仍需 SW_RESTORE');
+  assert.match(script, /ShowWindow\(\$hwnd, 5\)/, '非最小化时应使用 SW_SHOW');
+  // 不能出现无条件的 SW_RESTORE
+  assert.ok(!/\n\[void\]\[Win32Fg\]::ShowWindow\(\$hwnd, 9\)/.test(script), '存在无条件 SW_RESTORE');
+});
+
 test('activateTab 调用脚本并解析结果', async () => {
   const calls = [];
   const result = await activateTab(

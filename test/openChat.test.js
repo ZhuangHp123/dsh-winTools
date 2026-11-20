@@ -30,6 +30,12 @@ test('脚本包含关键步骤：找窗口、抢焦点、点搜索框、粘贴�
   }
 });
 
+test('只在钉钉最小化时才 SW_RESTORE，不破坏用户的最大化状态', () => {
+  const script = buildOpenChatScript('张三');
+  assert.match(script, /IsIconic\(\$found\)/);
+  assert.ok(!/\n\[void\]\[DshDingWin\]::ShowWindow\(\$found, 9\)/.test(script), '存在无条件 SW_RESTORE');
+});
+
 test('成功时返回 ok', async () => {
   const open = createChatOpener({ runPowerShell: async () => 'noise\n{"ok":true}\n' });
   assert.deepEqual(await open('张三丰'), { ok: true });

@@ -38,6 +38,7 @@ public class DshDingWin {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr l);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
@@ -82,7 +83,9 @@ $cb = [DshDingWin+EnumProc]{ param($h,$l)
 if ($found -eq [IntPtr]::Zero) { Write-Output '{"ok":false,"reason":"no-window"}'; exit 0 }
 
 # 跨进程抢前台会被 Windows 的焦点窃取保护挡掉，临时共享输入队列才能成功。
-[void][DshDingWin]::ShowWindow($found, 9)
+# 9 = SW_RESTORE 会把已最大化的钉钉还原成普通尺寸，只有最小化时才用它。
+if ([DshDingWin]::IsIconic($found)) { [void][DshDingWin]::ShowWindow($found, 9) }
+else { [void][DshDingWin]::ShowWindow($found, 5) }
 $fg = [DshDingWin]::GetForegroundWindow()
 $fgT = [DshDingWin]::GetWindowThreadProcessId($fg,[IntPtr]::Zero)
 $tgT = [DshDingWin]::GetWindowThreadProcessId($found,[IntPtr]::Zero)

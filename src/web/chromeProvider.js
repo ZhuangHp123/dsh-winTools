@@ -508,6 +508,10 @@ function defaultRunPowerShell(script, timeout) {
  *
  * SetForegroundWindow 在跨进程时经常失败（Windows 的焦点窃取保护），
  * 因此用 AttachThreadInput 临时共享输入队列——这是 UIA 自动化的标准做法。
+ *
+ * 还原窗口只能用 SW_RESTORE（9），但它对最大化窗口的语义是"变回普通尺寸"，
+ * 用户最大化使用 Chrome 时一切标签页窗口就缩回去了。所以先看是否最小化：
+ * 只有最小化才需要 SW_RESTORE，其余情况用 SW_SHOW（5）保持原有尺寸和最大化状态。
  */
 function buildActivateScript(hwnd, index) {
   return `
@@ -521,6 +525,7 @@ public class Win32Fg {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
@@ -541,7 +546,9 @@ $tabs = $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond
 if ($index -lt 0 -or $index -ge $tabs.Count) { [Console]::Out.Write('{"ok":false,"message":"tab index out of range"}'); exit 0 }
 $sel = $tabs.Item($index).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
 $sel.Select()
-[void][Win32Fg]::ShowWindow($hwnd, 9)
+# 9 = SW_RESTORE 会把最大化窗口还原成普通尺寸；只有最小化时才需要它。
+if ([Win32Fg]::IsIconic($hwnd)) { [void][Win32Fg]::ShowWindow($hwnd, 9) }
+else { [void][Win32Fg]::ShowWindow($hwnd, 5) }
 $fg = [Win32Fg]::GetForegroundWindow()
 if ($fg -ne $hwnd) {
   $fgThread = [Win32Fg]::GetWindowThreadProcessId($fg, [ref]([uint32]0))
