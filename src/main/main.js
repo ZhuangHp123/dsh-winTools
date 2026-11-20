@@ -56,6 +56,16 @@ const WINDOW_HEIGHT = 440;
 /** 收集启动期错误，界面底部显示，别让失败静默。 */
 const startupErrors = [];
 
+/**
+ * 钉钉登录期间的临时提示（"请在浏览器里完成授权…"）。
+ * 它是一次性状态而不是错误：登录一结束就该消失，不能像 startupErrors 那样常驻。
+ */
+let dingtalkNotice = '';
+
+function setDingtalkNotice(message) {
+  dingtalkNotice = message ? `钉钉：${message}` : '';
+}
+
 let win = null;
 let tray = null;
 let engine = null;
@@ -203,9 +213,24 @@ function createTray() {
         label: '登录钉钉（联系人/文档）',
         click: async () => {
           try {
-            await Promise.all(Object.values(dingtalkOAuth ?? {}).map((manager) => manager.login()));
-            startupErrors.push('钉钉：授权完成');
+            // 已有可用 token 的端点直接跳过：不然每点一次都要在浏览器里重新同意一遍。
+            const managers = Object.values(dingtalkOAuth ?? {});
+            const pending = [];
+            for (const manager of managers) {
+              const token = await manager.currentToken().catch(() => null);
+              if (!token) pending.push(manager);
+            }
+            if (pending.length === 0) {
+              setDingtalkNotice('已登录，无需重新授权');
+            } else {
+              setDingtalkNotice('请在浏览器里完成钉钉授权…');
+              // 串行而不是并发：每个端点一个回调端口，同时开会连开多个授权页，
+              // 用户不知道先点哪个。
+              for (const manager of pending) await manager.login();
+              setDingtalkNotice('');
+            }
           } catch (error) {
+            setDingtalkNotice('');
             startupErrors.push(`钉钉登录失败：${error?.message ?? error}`);
           }
           sendStatus();
@@ -309,13 +334,19 @@ function buildProviders() {
       mcpUrl: dingtalkUrls.contacts,
       store: tokenCache('contact'),
       openBrowser,
-      onNotice: (message) => startupErrors.push(`钉钉：${message}`),
+      onNotice: (message) => {
+        setDingtalkNotice(message);
+        sendStatus();
+      },
     }),
     docs: createOAuthManager({
       mcpUrl: dingtalkUrls.docs,
       store: tokenCache('doc'),
       openBrowser,
-      onNotice: (message) => startupErrors.push(`钉钉：${message}`),
+      onNotice: (message) => {
+        setDingtalkNotice(message);
+        sendStatus();
+      },
     }),
   };
 
@@ -437,7 +468,8 @@ function collectStatus() {
   const stats = fileProvider?.stats?.() ?? {};
   return {
     hotkey: registeredHotkey,
-    errors: startupErrors.slice(),
+    // 临时提示排在错误前面显示，登录结束后自动清空。
+    errors: [dingtalkNotice, ...startupErrors].filter(Boolean),
     indexing: Boolean(fileProvider?.isIndexing?.()),
     fileCount: stats.count ?? 0,
     clipboardCount: clipboardProvider?.stats?.().history ?? 0,
@@ -526,8 +558,15 @@ function registerIpc() {
   });
   ipcMain.handle('launcher:dingtalkLogin', async () => {
     try {
-      await Promise.all(Object.values(dingtalkOAuth ?? {}).map((manager) => manager.login()));
-      return { ok: true };
+      // 同托盘菜单：已有 token 的端点不重复授权，剩下的一个一个来。
+      const managers = Object.values(dingtalkOAuth ?? {});
+      const pending = [];
+      for (const manager of managers) {
+        const token = await manager.currentToken().catch(() => null);
+        if (!token) pending.push(manager);
+      }
+      for (const manager of pending) await manager.login();
+      return { ok: true, alreadyLoggedIn: pending.length === 0 };
     } catch (error) {
       return { ok: false, message: String(error?.message ?? error) };
     }
