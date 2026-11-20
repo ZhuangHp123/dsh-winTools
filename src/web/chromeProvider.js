@@ -511,7 +511,14 @@ function defaultRunPowerShell(script, timeout) {
  *
  * 还原窗口只能用 SW_RESTORE（9），但它对最大化窗口的语义是"变回普通尺寸"，
  * 用户最大化使用 Chrome 时一切标签页窗口就缩回去了。所以先看是否最小化：
- * 只有最小化才需要 SW_RESTORE，其余情况用 SW_SHOW（5）保持原有尺寸和最大化状态。
+ * 只有最小化才需要 SW_RESTORE。
+ *
+ * 跨窗口激活时 Chrome 可能把目标窗口的 WS_VISIBLE 清掉（表现为"窗口没了"，
+ * 但 HWND 和标签页都还在），因此激活前后各用一次 SW_SHOWNA（8）——
+ * 它只置可见位，不改尺寸、不改最大化状态、也不抢激活。
+ *
+ * 成功条件必须是"窗口可见 + 已在前台 + 目标标签页已选中"。只看 IsSelected
+ * 会骗过调用方：窗口其实没显示出来，启动器却以为自己切成功然后隐藏了。
  */
 function buildActivateScript(hwnd, index) {
   return `
@@ -526,6 +533,7 @@ public class Win32Fg {
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
@@ -546,9 +554,10 @@ $tabs = $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond
 if ($index -lt 0 -or $index -ge $tabs.Count) { [Console]::Out.Write('{"ok":false,"message":"tab index out of range"}'); exit 0 }
 $sel = $tabs.Item($index).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
 $sel.Select()
-# 9 = SW_RESTORE 会把最大化窗口还原成普通尺寸；只有最小化时才需要它。
+# 9 = SW_RESTORE 会把最大化窗口还原成普通尺寸，只有最小化时才需要它。
 if ([Win32Fg]::IsIconic($hwnd)) { [void][Win32Fg]::ShowWindow($hwnd, 9) }
-else { [void][Win32Fg]::ShowWindow($hwnd, 5) }
+# 8 = SW_SHOWNA：只置可见位，不改尺寸、不破坏最大化，也不抢激活。
+[void][Win32Fg]::ShowWindow($hwnd, 8)
 $fg = [Win32Fg]::GetForegroundWindow()
 if ($fg -ne $hwnd) {
   $fgThread = [Win32Fg]::GetWindowThreadProcessId($fg, [ref]([uint32]0))
@@ -559,8 +568,22 @@ if ($fg -ne $hwnd) {
   [void][Win32Fg]::AttachThreadInput($myThread, $fgThread, $false)
 }
 Start-Sleep -Milliseconds 250
-$ok = $sel.Current.IsSelected
-[Console]::Out.Write((@{ ok = $ok; selected = $ok; index = $index } | ConvertTo-Json -Compress))
+# 还有一次机会：切前台期间 Chrome 可能又把可见位清掉。
+if (-not [Win32Fg]::IsWindowVisible($hwnd)) {
+  [void][Win32Fg]::ShowWindow($hwnd, 8)
+  [void][Win32Fg]::SetForegroundWindow($hwnd)
+  Start-Sleep -Milliseconds 150
+}
+$visible = [Win32Fg]::IsWindowVisible($hwnd)
+$selected = $sel.Current.IsSelected
+$isForeground = ([Win32Fg]::GetForegroundWindow() -eq $hwnd)
+$ok = $visible -and $selected -and $isForeground
+$msg = ''
+$code = ''
+if (-not $visible) { $msg = '窗口未能显示'; $code = 'not_visible' }
+elseif (-not $isForeground) { $msg = '窗口未能切到前台'; $code = 'not_foreground' }
+elseif (-not $selected) { $msg = '标签页未能选中'; $code = 'not_selected' }
+[Console]::Out.Write((@{ ok = $ok; visible = $visible; foreground = $isForeground; selected = $selected; index = $index; message = $msg; code = $code } | ConvertTo-Json -Compress))
 `;
 }
 
@@ -581,7 +604,13 @@ async function activateTab(tab, options = {}) {
   const stdout = await runPowerShell(buildActivateScript(tab.hwnd, tab.index), options.timeout ?? UIA_TIMEOUT);
   try {
     const result = JSON.parse(String(stdout ?? '').trim());
-    return result?.ok ? { ok: true } : { ok: false, message: result?.message ?? '切换标签页失败' };
+    if (result?.ok) return { ok: true };
+    // 标签页其实已经切过去了，只是窗口没显示/没到前台。这种情况不能退回
+    // "新开标签页"——那会重复打开同一个页面。
+    if (result?.selected) {
+      return { ok: false, switched: true, message: result.message || '窗口未能切到前台' };
+    }
+    return { ok: false, message: result?.message || '切换标签页失败', code: result?.code };
   } catch {
     return { ok: false, message: '切换标签页失败' };
   }
@@ -753,6 +782,12 @@ function createChromeProvider(options = {}) {
           options,
         );
         if (result?.ok) return { switched: true, title: target.title };
+        // 标签页已经选中、只是窗口没显示出来：报错即可，不要新开重复标签页。
+        if (result?.switched) {
+          const error = new Error(result.message ?? '窗口未能切到前台');
+          error.code = 'switch_not_foreground';
+          throw error;
+        }
         if (target.url) {
           if (!chromePath) chromePath = findChrome();
           if (chromePath) {

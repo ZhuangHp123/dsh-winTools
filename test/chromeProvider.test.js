@@ -261,9 +261,15 @@ test('buildActivateScript 只在最小化时才 SW_RESTORE，避免把最大化�
   const script = buildActivateScript(1, 0);
   assert.match(script, /IsIconic\(\$hwnd\)/, '缺少 IsIconic 判断');
   assert.match(script, /ShowWindow\(\$hwnd, 9\)/, '最小化时仍需 SW_RESTORE');
-  assert.match(script, /ShowWindow\(\$hwnd, 5\)/, '非最小化时应使用 SW_SHOW');
   // 不能出现无条件的 SW_RESTORE
   assert.ok(!/\n\[void\]\[Win32Fg\]::ShowWindow\(\$hwnd, 9\)/.test(script), '存在无条件 SW_RESTORE');
+});
+
+test('buildActivateScript 用 SW_SHOWNA 兜底可见性，且成功条件包含可见与前台', () => {
+  const script = buildActivateScript(1, 0);
+  assert.match(script, /ShowWindow\(\$hwnd, 8\)/, '缺少 SW_SHOWNA 兜底');
+  assert.match(script, /IsWindowVisible\(\$hwnd\)/, '缺少可见性校验');
+  assert.match(script, /\$ok = \$visible -and \$selected -and \$isForeground/, '成功条件不完整');
 });
 
 test('activateTab 调用脚本并解析结果', async () => {
@@ -290,9 +296,24 @@ test('activateTab 缺少位置信息时不执行脚本', async () => {
 test('activateTab 脚本返回失败时透传 message', async () => {
   const result = await activateTab(
     { hwnd: 1, index: 0 },
-    { runPowerShell: async () => '{"ok":false,"message":"tab index out of range"}' },
+    { runPowerShell: async () => '{"ok":false,"message":"tab index out of range","selected":false}' },
   );
-  assert.deepEqual(result, { ok: false, message: 'tab index out of range' });
+  assert.equal(result.ok, false);
+  assert.equal(result.message, 'tab index out of range');
+  assert.equal(result.switched, undefined);
+});
+
+test('activateTab 标签页已选中但窗口没显示时标记 switched，避免重复开页', async () => {
+  const result = await activateTab(
+    { hwnd: 1, index: 0 },
+    {
+      runPowerShell: async () =>
+        '{"ok":false,"selected":true,"visible":false,"foreground":false,"message":"窗口未能显示","code":"not_visible"}',
+    },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.switched, true);
+  assert.match(result.message, /窗口未能显示/);
 });
 
 test('openUrl 以 detached 方式启动浏览器', () => {
