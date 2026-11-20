@@ -24,6 +24,7 @@ const { createAppProvider } = require('../apps/appProvider');
 const { createFileProvider, scanRoots, defaultRoots } = require('../files/fileProvider');
 const { createClipboardProvider } = require('../clipboard/clipboardProvider');
 const { createProjectProvider, defaultProjectRoots } = require('../projects/projectProvider');
+const { createChromeProvider } = require('../web/chromeProvider');
 
 const { createJsonCache } = require('./persistence');
 const { createWorkerScan } = require('./workerScan');
@@ -41,6 +42,7 @@ let engine = null;
 let fileProvider = null;
 let clipboardProvider = null;
 let projectProvider = null;
+let chromeProvider = null;
 let usagePersist = null;
 let registeredHotkey = null;
 let isQuitting = false;
@@ -137,6 +139,8 @@ function showWindow() {
   win.show();
   win.focus();
   win.webContents.send('launcher:shown');
+  // 标签页变化频繁，唤起时顺手刷一轮，避免搜到过期标题。
+  chromeProvider?.refresh?.().catch(() => {});
 }
 
 function hideWindow() {
@@ -237,6 +241,15 @@ function buildProviders() {
     ideaPath: typeof config.ideaPath === 'string' ? config.ideaPath : undefined,
   });
 
+  chromeProvider = createChromeProvider({
+    // config.json 可选：chromePath（字符串）、tabRefreshInterval（毫秒，0 关闭轮询）
+    chromePath: typeof config.chromePath === 'string' ? config.chromePath : undefined,
+    refreshInterval:
+      Number.isFinite(config.tabRefreshInterval) && config.tabRefreshInterval >= 0
+        ? config.tabRefreshInterval
+        : undefined,
+  });
+
   engine = createEngine({
     usageStore,
     limit: 9,
@@ -244,6 +257,7 @@ function buildProviders() {
   });
   engine.register(appProvider);
   engine.register(projectProvider);
+  engine.register(chromeProvider);
   engine.register(fileProvider);
   engine.register(clipboardProvider);
   return engine;
@@ -290,6 +304,8 @@ function collectStatus() {
     clipboardCount: clipboardProvider?.stats?.().history ?? 0,
     appCount: engine?.get('app')?.stats?.()?.shortcutCount ?? 0,
     projectCount: projectProvider?.stats?.().count ?? 0,
+    tabCount: chromeProvider?.stats?.().tabs ?? 0,
+    bookmarkCount: chromeProvider?.stats?.().bookmarks ?? 0,
     trayAvailable: Boolean(tray),
     userData: app.getPath('userData'),
   };

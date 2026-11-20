@@ -85,6 +85,11 @@ async function run({ app, win, query }) {
   await shot('smoke-project.png');
   console.log('[smoke] 锁定项目', JSON.stringify(await readRows()));
 
+  // 网页 provider：同样只搜不执行（切换标签页会抢焦点）。
+  await type('网页 ' + (process.env.DSH_SMOKE_WEB || 'cfmoto'));
+  await shot('smoke-web.png');
+  console.log('[smoke] 锁定网页', JSON.stringify(await readRows()));
+
   // 剪贴板：写入一段带唯一标记的文字，等轮询记录后再搜、再执行。
   const marker = `smoke-clip-${Date.now().toString(36)}`;
   const { clipboard } = require('electron');

@@ -24,6 +24,7 @@ const USAGE_LIMIT = 120;
 const DEFAULT_PROVIDER_WEIGHT = {
   app: 60,
   project: 50,
+  chrome: 30,
   file: 0,
   clipboard: -20,
   calc: 200,
@@ -72,7 +73,16 @@ function scoreCandidate(terms, candidate, options = {}) {
     }
   }
 
-  const hit = scoreFields(terms, fields);
+  // altTitles：和标题一样能独立命中，但分数打折——网页条目搜 "dingtalk"
+  // 时标题里没有域名，只能靠 URL 命中；折扣保证标题命中仍然优先。
+  let hit = scoreFields(terms, fields);
+  if (!hit && Array.isArray(candidate.altTitles)) {
+    for (const alt of candidate.altTitles) {
+      if (!alt) continue;
+      const altHit = scoreFields(terms, [{ text: String(alt), weight: 1 }]);
+      if (altHit && (!hit || altHit.score > hit.score)) hit = { score: altHit.score * 0.75 };
+    }
+  }
   if (!hit) return null;
 
   const providerId = candidate.provider ?? '';

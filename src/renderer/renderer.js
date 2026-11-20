@@ -14,8 +14,14 @@ const modeEl = document.getElementById('mode');
 const statusLeft = document.getElementById('status-left');
 const statusRight = document.getElementById('status-right');
 
-const KIND_LABEL = { app: '应用', project: '项目', file: '文件', clipboard: '剪贴板' };
-const KIND_ORDER = { app: 0, project: 1, file: 2, clipboard: 3 };
+const KIND_LABEL = {
+  app: '应用',
+  project: '项目',
+  web: '网页',
+  file: '文件',
+  clipboard: '剪贴板',
+};
+const KIND_ORDER = { app: 0, project: 1, web: 2, file: 3, clipboard: 4 };
 
 let items = [];
 let activeIndex = -1;
@@ -33,14 +39,21 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * provider id → 显示用的 kind。搜索框右边的徽标按 kind 取标签，
+ * 否则会显示 chrome / file 这类内部 id。
+ */
+const PROVIDER_KIND = { chrome: 'web' };
+
 function renderMode(hint) {
   if (!hint) {
     modeEl.hidden = true;
     modeEl.textContent = '';
     return;
   }
+  const kind = PROVIDER_KIND[hint] ?? hint;
   modeEl.hidden = false;
-  modeEl.textContent = KIND_LABEL[hint] ?? hint;
+  modeEl.textContent = KIND_LABEL[kind] ?? hint;
 }
 
 function renderResults() {
@@ -117,7 +130,7 @@ function scrollActiveIntoView() {
 function renderEmpty(query) {
   if (items.length > 0) return;
   if (!query.trim()) {
-    emptyEl.textContent = '输入关键字开始搜索；应用/项目/文件/剪贴板 可锁定搜索范围';
+    emptyEl.textContent = '输入关键字开始搜索；应用/项目/网页/文件/剪贴板 可锁定搜索范围';
   } else if (status.indexing) {
     emptyEl.textContent = '没有匹配结果（文件索引仍在构建中，稍后再试）';
   } else {
@@ -137,6 +150,7 @@ function renderStatus() {
     parts.push(`${status.fileCount.toLocaleString('zh-CN')} 个文件`);
   }
   if (status.projectCount > 0) parts.push(`项目 ${status.projectCount}`);
+  if (status.tabCount > 0) parts.push(`标签页 ${status.tabCount}`);
   if (status.clipboardCount > 0) parts.push(`剪贴板 ${status.clipboardCount}`);
 
   const errors = Array.isArray(status.errors) ? status.errors : [];

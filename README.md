@@ -1,6 +1,6 @@
 # dsh-winTools
 
-Windows 启动器：一个热键唤起搜索框，搜**应用**、**文件**、**剪贴板历史**，回车直接打开/复用。
+Windows 启动器：一个热键唤起搜索框，搜**应用**、**项目**、**网页**、**文件**、**剪贴板历史**，回车直接打开/复用。
 
 ## 快速开始
 
@@ -27,12 +27,13 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 | 操作 | 说明 |
 | --- | --- |
 | `Alt+Space` | 唤起/隐藏（被占用时会自动退到 `Alt+Shift+Space` → `Ctrl+Shift+Space` → ``Alt+` ``） |
-| 直接输入 | 应用 + 项目 + 文件 + 剪贴板一起搜，应用优先 |
-| `项目 xxx` | 锁定只搜 IDE 项目（`应用` / `文件` / `剪贴板` / `apps` / `clip` 同理） |
+| 直接输入 | 应用 + 项目 + 网页 + 文件 + 剪贴板一起搜，应用优先 |
+| `项目 xxx` | 锁定只搜 IDE 项目（`网页` / `文件` / `剪贴板` / `apps` / `clip` 同理） |
+| `网页 xxx` | 锁定只搜 Chrome 已打开标签页与收藏夹 |
 | `文件 xxx` | 锁定只搜文件 |
 | `~ xxx` | 快捷锁定剪贴板 |
 | `↑` `↓` / `Tab` | 上下移动 |
-| `Enter` | 执行：打开应用、用 IDEA 打开项目、打开文件、把剪贴板内容写回剪贴板 |
+| `Enter` | 执行：打开应用、用 IDEA 打开项目、切换/新开网页、打开文件、把剪贴板内容写回剪贴板 |
 | `Esc` | 清空输入；已为空时隐藏窗口 |
 | 托盘图标 | 显示搜索 / 重新索引文件 / 退出 |
 
@@ -55,6 +56,31 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 两个字段都可省略：`projectRoots` 省略用默认目录，`ideaPath` 省略时自动在
 `Program Files\JetBrains`、`%LOCALAPPDATA%\Programs`、Toolbox 和盘符根目录下找。
 
+### 网页（Chrome）
+
+两类来源，行为不同：
+
+- **已打开标签页** — 回车**切换过去**（选中该标签页并把 Chrome 窗口切到前台），不新开。
+- **收藏夹** — 回车**新开一个标签页**打开。
+
+标签页靠 Windows UI Automation 枚举（标题、位置），URL 从 Chrome 的 `History`
+库补齐；收藏夹直接读 `Bookmarks` JSON（含文件夹层级，文件夹名进 tags）。
+标签页列表每 15 秒后台刷新一次，窗口唤起时也会刷新一次。
+
+```json
+{
+  "chromePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "tabRefreshInterval": 15000
+}
+```
+
+两个字段都可省略：`chromePath` 省略时自动在 `Program Files`、`Program Files (x86)`、
+`%LOCALAPPDATA%` 下找，也可用环境变量 `DSH_CHROME` 指定；`tabRefreshInterval`
+为 0 表示关闭轮询（只在唤起时刷新）。多 profile（Default / Profile N）的收藏夹都会读。
+
+> 为什么标题里搜不到域名也能命中 `cfmoto`：页面标题通常不含域名，URL 的域名和
+> 路径段会作为次级检索词参与匹配，但单独命中时分数打折，标题命中仍优先。
+
 ## 数据位置
 
 全部在 `%APPDATA%\dsh-wintools\`：
@@ -76,6 +102,7 @@ src/
 │   └── usage.js      使用频次存储
 ├── apps/          开始菜单 .lnk 扫描与启动
 ├── projects/      IDE 项目发现与用 IDEA 打开
+├── web/           Chrome 标签页（UIA）与收藏夹搜索
 ├── files/         文件索引（缓存式，worker 后台扫盘）
 ├── clipboard/     剪贴板历史（轮询，去重，置顶）
 ├── main/          Electron 主进程
@@ -101,6 +128,12 @@ test/             node:test 单元测试
   的目录；回车 `idea64.exe <路径>`，detached 启动，IDE 生命周期不挂在启动器上。
 - **剪贴板**：Electron 没有剪贴板变更事件，只能轮询（600ms）。Electron 45 的
   `clipboard.readText()` 返回 Promise，轮询器对同步/异步两种返回都支持。
+- **网页**：走三条本地通道，不依赖调试端口。标签页/位置用 UI Automation 枚举，
+  URL 用 Chrome `History` 库按标题回填（`immutable=1` 只读打开，避开锁），
+  收藏夹读 `Bookmarks` JSON。枚举时必须按 `Get-Process chrome` 的 PID 过滤窗口：
+  Electron 系应用（VS Code/Cursor/Qoder）窗口类名同为 `Chrome_WidgetWin_1`，
+  不加过滤会去遍历它们的无障碍树，卡死数十秒。切换标签页用
+  `SelectionItemPattern.Select()` + `SetForegroundWindow`（配合 `AttachThreadInput`）。
 - **安全**：渲染进程 `contextIsolation: true` + `nodeIntegration: false`；
   界面只拿渲染需要的字段，"可执行项"完整对象留在主进程，按 id 取回。
 
