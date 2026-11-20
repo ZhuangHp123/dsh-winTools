@@ -41,6 +41,7 @@ async function run({ app, win, query }) {
           count: rows.length,
           rows: rows.map((row) => ({
             kind: row.querySelector('.kind-tag')?.textContent,
+            avatar: row.querySelector('.row-avatar')?.textContent,
             title: row.querySelector('.row-title')?.textContent,
             sub: row.querySelector('.row-sub')?.textContent,
             active: row.classList.contains('active'),
@@ -89,6 +90,16 @@ async function run({ app, win, query }) {
   await type('网页 ' + (process.env.DSH_SMOKE_WEB || 'cfmoto'));
   await shot('smoke-web.png');
   console.log('[smoke] 锁定网页', JSON.stringify(await readRows()));
+
+  // 钉钉：锁定搜索会走 MCP（可能触发 OAuth），冒烟里只验证界面能画出结果/状态。
+  // 没登录时状态栏会给出原因，这本身也是要验证的一部分。
+  await type('联系人 ' + (process.env.DSH_SMOKE_CONTACT || '张'));
+  await shot('smoke-contact.png');
+  console.log('[smoke] 锁定联系人', JSON.stringify(await readRows()));
+
+  await type('文档 ' + (process.env.DSH_SMOKE_DOC || '需求'));
+  await shot('smoke-doc.png');
+  console.log('[smoke] 锁定文档', JSON.stringify(await readRows()));
 
   // 剪贴板：写入一段带唯一标记的文字，等轮询记录后再搜、再执行。
   const marker = `smoke-clip-${Date.now().toString(36)}`;

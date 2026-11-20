@@ -130,6 +130,8 @@ function createEngine(options = {}) {
     const settled = await Promise.all(
       targets.map(async (provider) => {
         const startedAt = now();
+        // 远程 provider（如钉钉 MCP）自己做超时与降级，允许用 provider.timeout 覆盖。
+        const budget = Number.isFinite(provider.timeout) ? provider.timeout : providerTimeout;
         try {
           const raw = await withTimeout(
             Promise.resolve(
@@ -140,7 +142,7 @@ function createEngine(options = {}) {
                 signal: context.signal,
               }),
             ),
-            providerTimeout,
+            budget,
           );
           const items = normalizeItems(raw, provider.id);
           return {

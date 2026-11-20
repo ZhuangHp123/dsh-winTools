@@ -25,6 +25,8 @@ const DEFAULT_PROVIDER_WEIGHT = {
   app: 60,
   project: 50,
   chrome: 30,
+  dingtalk: 40,
+  dingdoc: 20,
   file: 0,
   clipboard: -20,
   calc: 200,
@@ -34,6 +36,13 @@ const DEFAULT_PROVIDER_WEIGHT = {
 
 /** 默认结果条数上限。 */
 const DEFAULT_LIMIT = 9;
+
+/**
+ * 远程 provider（钉钉）已经按服务端规则命中过的条目，本地模糊匹配不一定能复现：
+ * 联系人支持拼音首字母（hp → 庄浩鹏），文档按正文检索（标题里没有关键词）。
+ * 这类条目给一个低于 subsequence 档的保底分，保证它们能出现，但排在本地标题命中之后。
+ */
+const SERVER_MATCH_SCORE = 260;
 
 /**
  * frecency：最近 + 频繁。
@@ -83,6 +92,8 @@ function scoreCandidate(terms, candidate, options = {}) {
       if (altHit && (!hit || altHit.score > hit.score)) hit = { score: altHit.score * 0.75 };
     }
   }
+  // 服务端已命中（拼音 / 正文检索）但本地匹配不上的，保底收录，见 SERVER_MATCH_SCORE。
+  if (!hit && candidate.serverMatched) hit = { score: SERVER_MATCH_SCORE };
   if (!hit) return null;
 
   const providerId = candidate.provider ?? '';

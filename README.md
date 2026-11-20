@@ -27,15 +27,17 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 | 操作 | 说明 |
 | --- | --- |
 | `Alt+Space` | 唤起/隐藏（被占用时会自动退到 `Alt+Shift+Space` → `Ctrl+Shift+Space` → ``Alt+` ``） |
-| 直接输入 | 应用 + 项目 + 网页 + 文件 + 剪贴板一起搜，应用优先 |
-| `项目 xxx` | 锁定只搜 IDE 项目（`网页` / `文件` / `剪贴板` / `apps` / `clip` 同理） |
+| 直接输入 | 应用 + 项目 + 网页 + 联系人 + 文档 + 文件 + 剪贴板一起搜，应用优先 |
+| `项目 xxx` | 锁定只搜 IDE 项目（`网页` / `联系人` / `文档` / `文件` / `剪贴板` 同理） |
 | `网页 xxx` | 锁定只搜 Chrome 已打开标签页与收藏夹 |
+| `联系人 xxx` | 锁定搜钉钉同事（首次需要授权） |
+| `文档 xxx` | 锁定搜钉钉文档（只返回你有权限的） |
 | `文件 xxx` | 锁定只搜文件 |
 | `~ xxx` | 快捷锁定剪贴板 |
 | `↑` `↓` / `Tab` | 上下移动 |
-| `Enter` | 执行：打开应用、用 IDEA 打开项目、切换/新开网页、打开文件、把剪贴板内容写回剪贴板 |
+| `Enter` | 执行：打开应用、用 IDEA 打开项目、切换/新开网页、打开钉钉聊天、打开文档、打开文件、把剪贴板内容写回剪贴板 |
 | `Esc` | 清空输入；已为空时隐藏窗口 |
-| 托盘图标 | 显示搜索 / 重新索引文件 / 退出 |
+| 托盘图标 | 显示搜索 / 重新索引文件 / 登录钉钉 / 退出 |
 
 热键可通过 `%APPDATA%\dsh-wintools\config.json` 的 `hotkey` 字段或环境变量
 `DSH_HOTKEY` 指定，例如 `{ "hotkey": "Ctrl+Alt+K" }`。
@@ -81,12 +83,61 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 > 为什么标题里搜不到域名也能命中 `cfmoto`：页面标题通常不含域名，URL 的域名和
 > 路径段会作为次级检索词参与匹配，但单独命中时分数打折，标题命中仍优先。
 
+### 钉钉（联系人 / 文档）
+
+**联系人的数据来自本机钉钉客户端**：启动时解密 `%APPDATA%\DingTalk\<hash>_v3\DBFiles\dingtalk.db`
+（AES-128-ECB，密钥由"自己的数字 uid + `user_config` 里的 salt"推出来，算法同开源项目
+[dingwave-V3](https://github.com/E2ern1ty/dingwave-V3)），读出 500 多人的姓名、组织、
+数字 uid。好处是搜索零延迟、不用授权，回车能**一步跳到会话**：
+客户端内部的 `page/conversation?cid=<小uid>:<大uid>` 协议实测 150ms 就落到正确聊天，
+不经过搜索面板，用户看不到任何中间过程。
+
+以前走的搜索面板方案（点搜索框 → 粘姓名 → 等结果 → 回车，4~5 秒）仍然保留，
+只作为兜底：本地没有这个人（比如别的组织的同事）时才用。
+
+- **联系人** — 结果左边是名字首字色块（钉钉接口不返回真人头像 URL，好友列表的
+  `picUrl` 实测也是空的；中文名取后两字，如 张三丰 → 三丰）。回车直接打开单聊；
+  钉钉客户端需要在运行，没登录也没关系，协议会把登录页拉起来。
+- **文档** — 走官方 MCP 网关（`https://mcp-gw.dingtalk.com/oauth/server/doc`），
+  权限判断在服务端做，没权限的搜不到。回车先用钉钉内置浏览器打开（复用登录态），
+  不行再退系统浏览器；真打不开时状态栏会报"可能没有访问权限"。
+
+本地库里没有的人会退回 MCP 网关查（需要 OAuth，见下）。服务端的命中规则更宽松：
+联系人支持拼音首字母（`hp` 能命中"庄浩鹏"），文档按正文检索（标题里可能完全没有
+关键词）。这类结果本地模糊匹配不出来，所以远程结果会带一个保底分直接展示，
+但仍排在本地标题命中之后。
+
+首次使用需要授权一次（只有"本地没有的人/文档"才需要）：托盘菜单「登录钉钉」，
+或者第一次远程搜索时自动弹出浏览器。流程是标准 OAuth 2.1：动态注册本机
+客户端（RFC 7591）→ PKCE S256 → 回环回调 `http://127.0.0.1:<随机端口>/callback`
+（RFC 8252），请求里带 `resource` 指示器（RFC 8707）。两个端点作用域独立，
+各存一份 token 在 `%APPDATA%\dsh-wintools\cache\dingtalk-*-token.json`，过期自动刷新。
+
+**性能**：联系人搜索全在内存里（本地库读一次约 700ms，之后零延迟）；
+文档普通搜索（不锁定）只匹配本地缓存，只有 `文档 xxx` 才走网络，结果会写进缓存，
+同一关键词 90 秒内不重复请求。单字中文（`文档 需`）会查网络，纯西文单字符不会。
+
+两个端点默认已配好，`config.json` 里可以覆盖：
+
+```json
+{
+  "dingtalk": {
+    "contactsUrl": "https://mcp-gw.dingtalk.com/oauth/server/contact",
+    "docsUrl": "https://mcp-gw.dingtalk.com/oauth/server/doc"
+  }
+}
+```
+
+> 为什么没有群聊搜索：网关的 `group` 端点实测只提供 `create_internal_org_group`
+> （建群），没有群聊检索工具，`im` / `robot` 端点则不存在。群聊相关代码已移除。
+
 ## 数据位置
 
 全部在 `%APPDATA%\dsh-wintools\`：
 
 - `usage.json` — 使用频次（排序用的 frecency）
 - `cache/file-index.json` — 文件索引缓存（下次启动秒开）
+- `cache/dingtalk-*` — 钉钉 token 与联系人/文档缓存
 - `clipboard.json` — 剪贴板历史（最多 200 条，单条上限 8000 字符）
 - `config.json` — 可选配置
 
@@ -103,6 +154,7 @@ src/
 ├── apps/          开始菜单 .lnk 扫描与启动
 ├── projects/      IDE 项目发现与用 IDEA 打开
 ├── web/           Chrome 标签页（UIA）与收藏夹搜索
+├── dingtalk/      钉钉联系人/文档（本地库索引 + MCP 网关兜底 + OAuth）
 ├── files/         文件索引（缓存式，worker 后台扫盘）
 ├── clipboard/     剪贴板历史（轮询，去重，置顶）
 ├── main/          Electron 主进程
@@ -136,6 +188,16 @@ test/             node:test 单元测试
   `SelectionItemPattern.Select()` + `SetForegroundWindow`（配合 `AttachThreadInput`）。
 - **安全**：渲染进程 `contextIsolation: true` + `nodeIntegration: false`；
   界面只拿渲染需要的字段，"可执行项"完整对象留在主进程，按 id 取回。
+- **钉钉**：联系人读本地加密库（`localIndex.js`），文档走官方 MCP 网关。
+  本地库是 AES-128-ECB，密钥 `MD5(PBKDF2(自己的数字 uid + salt, "666DingT"))`
+  的十六进制前 16 位**当 ASCII 字节**用（不是 hex 解码，那样只有 8 字节，解密全错）。
+  自己的数字 uid 不在任何明文配置里：先用日志中 `uid=` 出现次数最多的几个候选
+  逐个试解 4KB 文件头，能解出 `SQLite format 3` 的就是。单聊 cid 是两人数字 uid
+  **按数值升序**用冒号拼接，顺序反了客户端只显示空白会话面板。
+  MCP 网关不接受静态 key，走标准 OAuth 2.1（动态注册 + PKCE + 回环回调，
+  RFC 8252/7591/8707），只有本地查不到的人才用。权限判断全在服务端，天然不会越权。
+  远程检索由服务端完成，命中规则比本地宽松：带 `serverMatched` 标记的条目走
+  `rank.js` 的保底分，否则拼音/正文命中会被本地模糊匹配误杀。
 
 ## 开发环境注意
 

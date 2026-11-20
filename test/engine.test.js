@@ -134,6 +134,21 @@ test('慢 provider 超时被丢弃，快 provider 正常返回', async () => {
   assert.match(result.errors[0].message, /timeout/);
 });
 
+test('单个 provider 可以用自己的 timeout 覆盖统一预算', async () => {
+  const engine = createEngine({ providerTimeout: 30 });
+  engine.register(fakeProvider('app', [{ title: 'chrome' }]));
+  engine.register({
+    id: 'dingtalk',
+    timeout: 300,
+    search: () => new Promise((resolve) => setTimeout(() => resolve([{ title: 'dingtalk chrome' }]), 120)),
+  });
+
+  const result = await engine.search('chrome');
+  assert.equal(result.errors.length, 0, '慢 provider 用自己的预算，不该超时');
+  assert.equal(result.items.length, 2);
+  assert.ok(result.items.some((item) => item.provider === 'dingtalk'));
+});
+
 test('后发起的查询让前一轮作废（stale）', async () => {
   const engine = createEngine({ providerTimeout: 2000 });
   let resolveSlow;

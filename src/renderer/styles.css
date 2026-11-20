@@ -149,6 +149,14 @@ body {
   color: #8fd8ff;
   background: rgba(60, 170, 255, 0.14);
 }
+.kind-tag.contact {
+  color: #7ee0d0;
+  background: rgba(20, 190, 170, 0.14);
+}
+.kind-tag.doc {
+  color: #ffb3c7;
+  background: rgba(255, 90, 130, 0.14);
+}
 .kind-tag.file {
   color: #7fe0b0;
   background: rgba(60, 200, 140, 0.14);
@@ -157,6 +165,26 @@ body {
   color: #ffcf7f;
   background: rgba(255, 180, 60, 0.14);
 }
+
+/* 联系人头像位：钉钉那边拿不到真人头像 URL，用名字首字色块，跟客户端一致。 */
+.row-avatar {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #10151c;
+}
+.row-avatar.av-0 { background: #7fb0ff; }
+.row-avatar.av-1 { background: #7ee0d0; }
+.row-avatar.av-2 { background: #ffcf7f; }
+.row-avatar.av-3 { background: #c9a2ff; }
+.row-avatar.av-4 { background: #8fd8a0; }
+.row-avatar.av-5 { background: #ffb3c7; }
 
 .row-text {
   flex: 1 1 auto;

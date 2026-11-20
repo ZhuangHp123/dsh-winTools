@@ -18,10 +18,12 @@ const KIND_LABEL = {
   app: '应用',
   project: '项目',
   web: '网页',
+  contact: '联系人',
+  doc: '文档',
   file: '文件',
   clipboard: '剪贴板',
 };
-const KIND_ORDER = { app: 0, project: 1, web: 2, file: 3, clipboard: 4 };
+const KIND_ORDER = { app: 0, project: 1, web: 2, contact: 3, doc: 4, file: 5, clipboard: 6 };
 
 let items = [];
 let activeIndex = -1;
@@ -30,6 +32,15 @@ let status = { indexing: false, fileCount: 0, errors: [] };
 let debounceTimer = null;
 
 const DEBOUNCE_MS = 60;
+
+const AVATAR_TONES = 6;
+
+/** 同一个名字永远落在同一个色号上，避免每次搜索换色。 */
+function avatarTone(initials) {
+  let sum = 0;
+  for (const char of String(initials)) sum = (sum + char.codePointAt(0)) % 997;
+  return sum % AVATAR_TONES;
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -43,7 +54,7 @@ function escapeHtml(value) {
  * provider id → 显示用的 kind。搜索框右边的徽标按 kind 取标签，
  * 否则会显示 chrome / file 这类内部 id。
  */
-const PROVIDER_KIND = { chrome: 'web' };
+const PROVIDER_KIND = { chrome: 'web', dingtalk: 'contact', dingdoc: 'doc' };
 
 function renderMode(hint) {
   if (!hint) {
@@ -75,9 +86,15 @@ function renderResults() {
     li.dataset.id = item.id;
 
     const kind = item.kind ?? item.provider ?? '';
-    const tag = document.createElement('span');
-    tag.className = `kind-tag ${escapeHtml(kind)}`;
-    tag.textContent = KIND_LABEL[kind] ?? kind.slice(0, 2);
+    const lead = document.createElement('span');
+    if (item.initials) {
+      // 联系人用首字色块当头像（拿不到真人头像 URL），顶掉左边的类别标签。
+      lead.className = `row-avatar av-${avatarTone(item.initials)}`;
+      lead.textContent = item.initials;
+    } else {
+      lead.className = `kind-tag ${escapeHtml(kind)}`;
+      lead.textContent = KIND_LABEL[kind] ?? kind.slice(0, 2);
+    }
 
     const text = document.createElement('div');
     text.className = 'row-text';
@@ -93,7 +110,7 @@ function renderResults() {
       text.appendChild(sub);
     }
 
-    li.append(tag, text);
+    li.append(lead, text);
 
     if (item.pinned) {
       const pin = document.createElement('span');
@@ -130,7 +147,7 @@ function scrollActiveIntoView() {
 function renderEmpty(query) {
   if (items.length > 0) return;
   if (!query.trim()) {
-    emptyEl.textContent = '输入关键字开始搜索；应用/项目/网页/文件/剪贴板 可锁定搜索范围';
+    emptyEl.textContent = '输入关键字开始搜索；应用/项目/网页/联系人/文档/文件/剪贴板 可锁定搜索范围';
   } else if (status.indexing) {
     emptyEl.textContent = '没有匹配结果（文件索引仍在构建中，稍后再试）';
   } else {
@@ -151,6 +168,8 @@ function renderStatus() {
   }
   if (status.projectCount > 0) parts.push(`项目 ${status.projectCount}`);
   if (status.tabCount > 0) parts.push(`标签页 ${status.tabCount}`);
+  if (status.contactCount > 0) parts.push(`联系人 ${status.contactCount}`);
+  if (status.docCount > 0) parts.push(`文档 ${status.docCount}`);
   if (status.clipboardCount > 0) parts.push(`剪贴板 ${status.clipboardCount}`);
 
   const errors = Array.isArray(status.errors) ? status.errors : [];

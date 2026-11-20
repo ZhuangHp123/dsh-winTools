@@ -130,3 +130,22 @@ test('每个结果都带上 score 字段供 UI 调试', () => {
   assert.equal(typeof ranked[0].score, 'number');
   assert.ok(ranked[0].score > 0);
 });
+
+test('serverMatched 的条目在本地匹配不上时也保留，但排在本地命中之后', () => {
+  const ranked = rankCandidates(
+    ['hp'],
+    [
+      { id: 'dingtalk:user:u9', provider: 'dingtalk', title: '庄浩鹏', serverMatched: true },
+      { id: 'file:hp', provider: 'file', title: 'hp-notes.md' },
+    ],
+    { now: NOW },
+  );
+  assert.equal(ranked.length, 2);
+  assert.equal(ranked[0].id, 'file:hp');
+  assert.equal(ranked[1].id, 'dingtalk:user:u9');
+});
+
+test('没有 serverMatched 标记的候选仍然要本地命中才保留', () => {
+  const ranked = rankCandidates(['hp'], [{ id: 'x', provider: 'dingtalk', title: '庄浩鹏' }], { now: NOW });
+  assert.deepEqual(ranked, []);
+});

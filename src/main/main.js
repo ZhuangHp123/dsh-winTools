@@ -25,6 +25,25 @@ const { createFileProvider, scanRoots, defaultRoots } = require('../files/filePr
 const { createClipboardProvider } = require('../clipboard/clipboardProvider');
 const { createProjectProvider, defaultProjectRoots } = require('../projects/projectProvider');
 const { createChromeProvider } = require('../web/chromeProvider');
+const { createContactProvider, createDocumentProvider } = require('../dingtalk/dingtalkProvider');
+const { createChatOpener, createCidOpener } = require('../dingtalk/openChat');
+const { findDataDir, loadLocalContacts, cidFor } = require('../dingtalk/localIndex');
+const { createOAuthManager } = require('../dingtalk/oauth');
+
+/**
+ * 钉钉 MCP 网关的端点。使用 OAuth 的回环流程，
+ * 因此这里只需要端点本身，不需要用户在配置里贴 token。
+ *
+ * 只接联系人和文档：网关上的 group 端点只有建群工具、没有群聊检索，
+ * 所以不做群聊搜索。
+ */
+const DINGTALK_MCP_ENDPOINTS = {
+  contacts: 'https://mcp-gw.dingtalk.com/oauth/server/contact',
+  docs: 'https://mcp-gw.dingtalk.com/oauth/server/doc',
+};
+
+/** 每个 MCP 端点一个 token（作用域独立），所以每个端点一个管理器。 */
+let dingtalkOAuth = null;
 
 const { createJsonCache } = require('./persistence');
 const { createWorkerScan } = require('./workerScan');
@@ -43,6 +62,8 @@ let fileProvider = null;
 let clipboardProvider = null;
 let projectProvider = null;
 let chromeProvider = null;
+let contactProvider = null;
+let documentProvider = null;
 let usagePersist = null;
 let registeredHotkey = null;
 let isQuitting = false;
@@ -176,6 +197,18 @@ function createTray() {
     Menu.buildFromTemplate([
       { label: '显示搜索', click: () => showWindow() },
       { label: '重新索引文件', click: () => reindexFiles() },
+      {
+        label: '登录钉钉（联系人/文档）',
+        click: async () => {
+          try {
+            await Promise.all(Object.values(dingtalkOAuth ?? {}).map((manager) => manager.login()));
+            startupErrors.push('钉钉：授权完成');
+          } catch (error) {
+            startupErrors.push(`钉钉登录失败：${error?.message ?? error}`);
+          }
+          sendStatus();
+        },
+      },
       { type: 'separator' },
       { label: '退出', click: () => quitApp() },
     ]),
@@ -250,6 +283,91 @@ function buildProviders() {
         : undefined,
   });
 
+  // 钉钉：走官方 MCP 网关的 OAuth 流程；config.dingtalk.*Url 可覆盖端点。
+  const dingtalkConfig = config.dingtalk && typeof config.dingtalk === 'object' ? config.dingtalk : {};
+  const dingtalkUrls = {
+    contacts:
+      typeof dingtalkConfig.contactsUrl === 'string' ? dingtalkConfig.contactsUrl : DINGTALK_MCP_ENDPOINTS.contacts,
+    docs: typeof dingtalkConfig.docsUrl === 'string' ? dingtalkConfig.docsUrl : DINGTALK_MCP_ENDPOINTS.docs,
+  };
+  const openDeepLink = async (uri) => {
+    // deep link 不是 http，必须走 openExternal；失败会 reject，由 provider 兜。
+    await shell.openExternal(uri);
+  };
+  const openBrowser = async (uri) => {
+    await shell.openExternal(uri);
+  };
+  const tokenCache = (name) =>
+    createJsonCache(userDataPath('cache', `dingtalk-${name}-token.json`), {
+      onError: (message) => startupErrors.push(message),
+    });
+
+  dingtalkOAuth = {
+    contacts: createOAuthManager({
+      mcpUrl: dingtalkUrls.contacts,
+      store: tokenCache('contact'),
+      openBrowser,
+      onNotice: (message) => startupErrors.push(`钉钉：${message}`),
+    }),
+    docs: createOAuthManager({
+      mcpUrl: dingtalkUrls.docs,
+      store: tokenCache('doc'),
+      openBrowser,
+      onNotice: (message) => startupErrors.push(`钉钉：${message}`),
+    }),
+  };
+
+  // 本地库解密是同步 IO（70MB 的库要几百毫秒），放进 setImmediate 里跑，
+  // 免得卡住窗口首帧。
+  let localContacts;
+  let localPending = null;
+  const loadLocal = () => {
+    if (localContacts) return localContacts;
+    if (!localPending) {
+      localPending = new Promise((resolve) => {
+        setImmediate(() => {
+          try {
+            const dataDir = findDataDir();
+            localContacts = dataDir ? loadLocalContacts(dataDir) : null;
+          } catch {
+            localContacts = null;
+          }
+          resolve(localContacts);
+        });
+      });
+    }
+    return localPending;
+  };
+  const openByUid = createCidOpener();
+  const openCid = async (uid) => {
+    const local = await loadLocal();
+    if (!local?.selfUid) return { ok: false, message: '读不到钉钉本地账号信息，无法直接定位会话' };
+    return openByUid(cidFor(local.selfUid, uid));
+  };
+
+  contactProvider = createContactProvider({
+    mcpUrl: dingtalkUrls.contacts,
+    oauth: dingtalkOAuth.contacts,
+    // 冒烟测试里不弹 OAuth，只验证界面能画出缓存结果或空状态。
+    allowRemote: process.env.DSH_SMOKE !== '1',
+    cache: createJsonCache(userDataPath('cache', 'dingtalk-contacts.json'), {
+      onError: (message) => startupErrors.push(message),
+    }),
+    loadLocal,
+    openByUid: openCid,
+    openChat: createChatOpener(),
+  });
+
+  documentProvider = createDocumentProvider({
+    mcpUrl: dingtalkUrls.docs,
+    oauth: dingtalkOAuth.docs,
+    allowRemote: process.env.DSH_SMOKE !== '1',
+    cache: createJsonCache(userDataPath('cache', 'dingtalk-docs.json'), {
+      onError: (message) => startupErrors.push(message),
+    }),
+    openExternal: openDeepLink,
+  });
+
   engine = createEngine({
     usageStore,
     limit: 9,
@@ -258,6 +376,8 @@ function buildProviders() {
   engine.register(appProvider);
   engine.register(projectProvider);
   engine.register(chromeProvider);
+  engine.register(contactProvider);
+  engine.register(documentProvider);
   engine.register(fileProvider);
   engine.register(clipboardProvider);
   return engine;
@@ -306,6 +426,10 @@ function collectStatus() {
     projectCount: projectProvider?.stats?.().count ?? 0,
     tabCount: chromeProvider?.stats?.().tabs ?? 0,
     bookmarkCount: chromeProvider?.stats?.().bookmarks ?? 0,
+    contactCount: contactProvider?.stats?.().contacts ?? 0,
+    dingtalkConfigured: Boolean(contactProvider?.stats?.().configured),
+    docCount: documentProvider?.stats?.().documents ?? 0,
+    docsConfigured: Boolean(documentProvider?.stats?.().configured),
     trayAvailable: Boolean(tray),
     userData: app.getPath('userData'),
   };
@@ -329,6 +453,7 @@ function registerIpc() {
         kind: item.kind,
         title: item.title,
         subtitle: item.subtitle,
+        initials: item.initials,
         score: item.score,
         pinned: item.pinned,
       })),
@@ -362,6 +487,14 @@ function registerIpc() {
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url);
     return { ok: true };
   });
+  ipcMain.handle('launcher:dingtalkLogin', async () => {
+    try {
+      await Promise.all(Object.values(dingtalkOAuth ?? {}).map((manager) => manager.login()));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: String(error?.message ?? error) };
+    }
+  });
 }
 
 function quitApp() {
@@ -377,6 +510,11 @@ app.whenReady().then(async () => {
   const config = loadConfig();
   registerHotkey(config);
   createTray();
+
+  // 已存的 OAuth token 先读出来；没有也不阻塞启动，等真正搜钉钉时再走登录。
+  for (const manager of Object.values(dingtalkOAuth ?? {})) {
+    await manager.load().catch(() => {});
+  }
 
   // provider 初始化不阻塞窗口显示：先把空壳亮出来，索引在后台长。
   const initErrors = await engine.initAll();
