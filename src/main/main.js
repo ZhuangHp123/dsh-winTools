@@ -176,6 +176,16 @@ function showWindow() {
   chromeProvider?.refresh?.().catch(() => {});
 }
 
+/**
+ * 重新显示但不重置界面。执行失败时用：此时用户还停在原来的搜索结果上，
+ * 清空输入（launcher:shown 的行为）等于让他重搜一遍。
+ */
+function resurfaceWindow() {
+  if (!win) return;
+  win.show();
+  win.focus();
+}
+
 function hideWindow() {
   if (!win || !win.isVisible()) return;
   win.hide();
@@ -308,6 +318,9 @@ function buildProviders() {
       Number.isFinite(config.tabRefreshInterval) && config.tabRefreshInterval >= 0
         ? config.tabRefreshInterval
         : undefined,
+    // 切标签页的 P/Invoke 类编译一次缓存成 DLL，避免每次回车都在 PowerShell
+    // 里现场编译（pwsh 7 上要 450ms）。
+    win32AssemblyPath: userDataPath('cache', 'win32fg.dll'),
   });
 
   // 钉钉：走官方 MCP 网关的 OAuth 流程；config.dingtalk.*Url 可覆盖端点。
@@ -528,11 +541,16 @@ function registerIpc() {
     if (!engine || !payload?.id) return { ok: false, message: '无效条目' };
     const item = lastResults.get(payload.id);
     if (!item) return { ok: false, message: '结果已过期，请重新搜索' };
+    // 先收起窗口再执行：切标签页要起 PowerShell，几百毫秒到一秒；
+    // 等它跑完再隐藏，用户会觉得"按了回车没反应"。失败时再把界面叫回来显示错误。
+    const wasVisible = Boolean(win?.isVisible());
+    hideWindow();
     const result = await engine.activate(item);
     if (result.ok) {
-      hideWindow();
       scheduleUsageSave();
+      return result;
     }
+    if (wasVisible) resurfaceWindow();
     return result;
   });
 

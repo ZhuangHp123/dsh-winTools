@@ -482,8 +482,14 @@ function defaultQueryHistory(options = {}) {
   return rows;
 }
 
-/** 默认 PowerShell 执行器。优先 pwsh（7.x），没有就退到 Windows PowerShell。 */
-function defaultRunPowerShell(script, timeout) {
+/**
+ * 默认 PowerShell 执行器。
+ *
+ * 默认优先 pwsh（7.x）：枚举标签页时它比 5.1 快不少（UIA 遍历是主要耗时）。
+ * 但切成前台是"用户按了回车就等着"的路径，瓶颈在进程启动而非脚本本身，
+ * 这时 5.1 反而更快，所以激活传 `preferWindowsPowerShell: true`。
+ */
+function defaultRunPowerShell(script, timeout, options = {}) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const attempt = (exe) =>
     new Promise((resolve, reject) => {
@@ -497,10 +503,15 @@ function defaultRunPowerShell(script, timeout) {
         },
       );
     });
-  return attempt('pwsh').catch((error) => {
-    if (error?.code !== 'ENOENT') throw error;
-    return attempt('powershell.exe');
-  });
+  const order = options.preferWindowsPowerShell ? ['powershell.exe', 'pwsh'] : ['pwsh', 'powershell.exe'];
+  const tryNext = (i) =>
+    attempt(order[i]).catch((error) => {
+      // 只有"该 exe 不存在"才换下一个；脚本自身失败必须原样上报，
+      // 否则会在另一个解释器里把同一个操作再执行一遍。
+      if (error?.code === 'ENOENT' && i + 1 < order.length) return tryNext(i + 1);
+      throw error;
+    });
+  return tryNext(0);
 }
 
 /**
@@ -520,13 +531,12 @@ function defaultRunPowerShell(script, timeout) {
  * 成功条件必须是"窗口可见 + 已在前台 + 目标标签页已选中"。只看 IsSelected
  * 会骗过调用方：窗口其实没显示出来，启动器却以为自己切成功然后隐藏了。
  */
-function buildActivateScript(hwnd, index) {
-  return `
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type @"
+/**
+ * 切窗口要用的 Win32 P/Invoke 声明。
+ * 单独抽成常量是为了能编译一次、缓存成 DLL 复用：PowerShell 7 上每次
+ * Add-Type 现场编译要 450ms，而加载已有 DLL 只要 ~100ms。
+ */
+const FG_NATIVE_SOURCE = `
 using System; using System.Runtime.InteropServices;
 public class Win32Fg {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
@@ -540,7 +550,48 @@ public class Win32Fg {
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
 }
-"@
+`;
+
+/**
+ * 生成加载 P/Invoke 类的脚本片段。
+ *
+ * 编译产物和运行时绑定：pwsh 7（.NET 8）编译的 DLL 不能被 PowerShell 5.1
+ * 加载，反之亦然，所以按 PSEdition 分开缓存（.core.dll / .fx.dll）。
+ * 任何一步失败都退回现场编译，保证功能不受影响。
+ */
+function buildNativePrologue(assemblyPath) {
+  const b64 = Buffer.from(String(assemblyPath ?? ''), 'utf8').toString('base64');
+  return `
+$asmPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}'))
+$src = @'
+${FG_NATIVE_SOURCE}
+'@
+$loaded = $false
+if ($asmPath) {
+  if ($PSVersionTable.PSEdition -eq 'Core') { $asmPath = $asmPath -replace '\\.dll$', '.core.dll' }
+  else { $asmPath = $asmPath -replace '\\.dll$', '.fx.dll' }
+  if (Test-Path $asmPath) {
+    try { Add-Type -Path $asmPath; $loaded = $true } catch { $loaded = $false }
+  }
+  if (-not $loaded) {
+    try {
+      Add-Type -TypeDefinition $src -OutputAssembly $asmPath -ErrorAction Stop
+      Add-Type -Path $asmPath
+      $loaded = $true
+    } catch { $loaded = $false }
+  }
+}
+if (-not $loaded) { Add-Type -TypeDefinition $src }
+`;
+}
+
+function buildActivateScript(hwnd, index, options = {}) {
+  return `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+${buildNativePrologue(options.assemblyPath)}
 $hwnd = [IntPtr][int64]${Number(hwnd)}
 $index = ${Number(index)}
 if (-not [Win32Fg]::IsWindow($hwnd)) { [Console]::Out.Write('{"ok":false,"message":"窗口已关闭"}'); exit 0 }
@@ -567,16 +618,21 @@ if ($fg -ne $hwnd) {
   [void][Win32Fg]::SetForegroundWindow($hwnd)
   [void][Win32Fg]::AttachThreadInput($myThread, $fgThread, $false)
 }
-Start-Sleep -Milliseconds 250
 # 还有一次机会：切前台期间 Chrome 可能又把可见位清掉。
 if (-not [Win32Fg]::IsWindowVisible($hwnd)) {
   [void][Win32Fg]::ShowWindow($hwnd, 8)
   [void][Win32Fg]::SetForegroundWindow($hwnd)
-  Start-Sleep -Milliseconds 150
 }
-$visible = [Win32Fg]::IsWindowVisible($hwnd)
-$selected = $sel.Current.IsSelected
-$isForeground = ([Win32Fg]::GetForegroundWindow() -eq $hwnd)
+# 短轮询而不是死等固定时长：条件一满足就返回，通常几十毫秒内。
+# 上限兜住 Chrome 的慢响应，避免为了少数情况让每次激活都多等。
+$deadline = [DateTime]::UtcNow.AddMilliseconds(250)
+do {
+  $visible = [Win32Fg]::IsWindowVisible($hwnd)
+  $selected = $sel.Current.IsSelected
+  $isForeground = ([Win32Fg]::GetForegroundWindow() -eq $hwnd)
+  if ($visible -and $selected -and $isForeground) { break }
+  Start-Sleep -Milliseconds 25
+} while ([DateTime]::UtcNow -lt $deadline)
 $ok = $visible -and $selected -and $isForeground
 $msg = ''
 $code = ''
@@ -601,7 +657,12 @@ async function activateTab(tab, options = {}) {
     return { ok: false, message: '缺少窗口标识，请重新索引后再试' };
   }
   const runPowerShell = options.runPowerShell ?? defaultRunPowerShell;
-  const stdout = await runPowerShell(buildActivateScript(tab.hwnd, tab.index), options.timeout ?? UIA_TIMEOUT);
+  const script = buildActivateScript(tab.hwnd, tab.index, {
+    assemblyPath: options.assemblyPath,
+  });
+  const stdout = await runPowerShell(script, options.timeout ?? UIA_TIMEOUT, {
+    preferWindowsPowerShell: true,
+  });
   try {
     const result = JSON.parse(String(stdout ?? '').trim());
     if (result?.ok) return { ok: true };
@@ -660,12 +721,15 @@ function defaultExists(target) {
  * @param {Function} [options.openUrl] 注入 URL 打开
  * @param {()=>string|null} [options.findChrome] 注入 chrome.exe 查找
  * @param {number} [options.refreshInterval] 标签页刷新间隔（毫秒）
+ * @param {string} [options.win32AssemblyPath] P/Invoke 类缓存 DLL 的路径
  */
 function createChromeProvider(options = {}) {
   const listTabs = options.listTabs ?? ((o) => listTabsViaUia(o));
   const fillUrls = options.fillUrls ?? ((tabs, o) => fillUrlsFromHistory(tabs, o));
   const loadBook = options.loadBookmarks ?? (() => loadBookmarks(options));
-  const activateTabFn = options.activateTab ?? ((tab, o) => activateTab(tab, o));
+  const activateTabFn =
+    options.activateTab ??
+    ((tab, o) => activateTab(tab, { ...o, assemblyPath: options.win32AssemblyPath }));
   const openUrlFn = options.openUrl ?? ((exe, url, o) => openUrl(exe, url, o));
   const findChrome = options.findChrome ?? (() => findChromeExecutable(options));
   const refreshInterval = options.refreshInterval ?? 15000;
