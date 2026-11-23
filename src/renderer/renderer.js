@@ -8,11 +8,13 @@
  */
 
 const input = document.getElementById('query');
+const launcherEl = document.getElementById('launcher');
 const resultsEl = document.getElementById('results');
 const emptyEl = document.getElementById('empty');
 const modeEl = document.getElementById('mode');
 const statusLeft = document.getElementById('status-left');
 const statusRight = document.getElementById('status-right');
+const searchRowEl = document.querySelector('.search-row');
 
 const KIND_LABEL = {
   app: '应用',
@@ -32,6 +34,8 @@ let searchToken = 0;
 let pendingAvatars = new Map();
 let status = { indexing: false, fileCount: 0, errors: [] };
 let debounceTimer = null;
+/** 当前是否处于"只有搜索框"的紧凑态。 */
+let compact = false;
 
 const DEBOUNCE_MS = 60;
 
@@ -199,6 +203,21 @@ function renderEmpty(query) {
   }
 }
 
+/**
+ * 紧凑态：刚唤起、还没输入时把结果区、提示区和状态栏收起来，
+ * 窗口高度跟着收成一行，屏幕上就只剩一个输入框。
+ */
+function setCompact(next) {
+  if (compact === next) return;
+  compact = next;
+  launcherEl.classList.toggle('compact', compact);
+  // 展开时形状由 CSS 决定，主进程只需恢复默认高度；
+  // 收起时把搜索行的真实高度报上去，避免不同 DPI 下留白或裁字。
+  // +2 是容器上下各 1px 的边框，否则紧贴时会被裁掉一像素。
+  const height = compact ? Math.ceil(searchRowEl.getBoundingClientRect().height) + 2 : null;
+  window.launcher.setCompact({ compact, height }).catch(() => {});
+}
+
 function renderStatus() {
   const parts = [];
   if (status.indexing) {
@@ -247,6 +266,8 @@ async function search() {
   renderMode(response?.query?.providerHint ?? null, response?.query?.alias ?? null);
   renderResults();
   renderEmpty(query);
+  // 纯空白输入也可能让 provider 吐默认条目，那种情况要展开，不能把结果裁在 52px 里。
+  setCompact(!query.trim() && items.length === 0);
 
   if (response?.errors?.length) {
     statusLeft.classList.add('warn');
@@ -256,7 +277,27 @@ async function search() {
   }
 }
 
+/**
+ * 回到"刚打开"的样子：没有结果、没有徽标、窗口收成一行。
+ * 空输入不发起搜索——provider 对空词元会返回"最近/全部"，那就又弹出整页了。
+ */
+function resetToCompact() {
+  searchToken += 1; // 让在途请求的结果作废
+  items = [];
+  activeIndex = -1;
+  resultsEl.textContent = '';
+  resultsEl.hidden = true;
+  emptyEl.hidden = false;
+  renderMode(null);
+  renderEmpty('');
+  setCompact(true);
+}
+
 function scheduleSearch() {
+  if (!input.value.trim()) {
+    resetToCompact();
+    return;
+  }
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
@@ -322,12 +363,7 @@ input.addEventListener('keydown', (event) => {
 // 再次唤起时清空并聚焦：启动器的直觉是"每次都是新的搜索"。
 window.launcher.onShown(() => {
   input.value = '';
-  items = [];
-  activeIndex = -1;
-  resultsEl.textContent = '';
-  resultsEl.hidden = true;
-  emptyEl.hidden = false;
-  renderMode(null);
+  resetToCompact();
   input.focus();
   window.launcher.status().then((next) => {
     if (!next) return;
@@ -352,4 +388,6 @@ window.launcher
   })
   .catch(() => {});
 
+// 一加载就收成一行：窗口是按展开尺寸建的，等 launcher:shown 再收会闪一帧大空白。
+setCompact(true);
 input.focus();

@@ -52,6 +52,8 @@ const { resolveHotkey, hotkeyCandidates } = require('./hotkey');
 
 const WINDOW_WIDTH = 680;
 const WINDOW_HEIGHT = 440;
+/** 空状态只留搜索框时的高度下限。渲染进程量出实际行高后会下发精确值。 */
+const MIN_WINDOW_HEIGHT = 40;
 
 /** 收集启动期错误，界面底部显示，别让失败静默。 */
 const startupErrors = [];
@@ -83,13 +85,11 @@ let saveUsageTimer = null;
 /** 最近一轮搜索的完整条目，key 是 id。activate 用。 */
 let lastResults = new Map();
 
-// 冒烟跑在独立 userData 下：真实启动器可能正开着，共用目录会被单实例锁直接踢掉；
+// 冒烟跑在固定名字的独立 userData 下：真实启动器可能正开着，共用目录会被单实例锁直接踢掉；
 // 顺带也不会把冒烟写出来的剪贴板/用量记录塞进用户的真实数据。
-// 退出时目录还锁着删不掉，所以在启动前清上一次的。
+// 不要每次清空——钉钉 token 存在这里，删了冒烟就会卡在等授权那一步。
 if (process.env.DSH_SMOKE === '1') {
-  const smokeUserData = path.join(app.getPath('temp'), 'dsh-smoke');
-  fs.rmSync(smokeUserData, { recursive: true, force: true });
-  app.setPath('userData', smokeUserData);
+  app.setPath('userData', path.join(app.getPath('temp'), 'dsh-smoke'));
 }
 
 /** 单实例：第二次启动直接把已有窗口叫出来，不要开两个托盘图标。 */
@@ -509,6 +509,19 @@ function collectStatus() {
 }
 
 function registerIpc() {
+  ipcMain.handle('launcher:setCompact', (_event, payload) => {
+    if (!win) return { ok: false };
+    const compact = Boolean(payload?.compact);
+    // 渲染进程量出的行高优先；异常值夹在合理范围内，别把窗口缩没了。
+    const measured = Math.round(Number(payload?.height));
+    const height = compact
+      ? Math.min(WINDOW_HEIGHT, Math.max(MIN_WINDOW_HEIGHT, measured || MIN_WINDOW_HEIGHT))
+      : WINDOW_HEIGHT;
+    const bounds = win.getBounds();
+    win.setBounds({ x: bounds.x, y: bounds.y, width: WINDOW_WIDTH, height }, false);
+    return { ok: true, height };
+  });
+
   ipcMain.handle('launcher:search', async (_event, input) => {
     if (!engine) return { items: [], errors: [] };
     const result = await engine.search(typeof input === 'string' ? input : '');

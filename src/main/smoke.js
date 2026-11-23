@@ -78,6 +78,24 @@ async function run({ app, win, query }) {
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log('[smoke] 下移后', JSON.stringify(await readRows()));
 
+  // Esc 清空后应收回紧凑态（只有输入框）。
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const input = document.getElementById('query');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const compacted = await win.webContents.executeJavaScript(`
+    ({
+      compactClass: document.getElementById('launcher').classList.contains('compact'),
+      height: window.outerHeight,
+    })
+  `);
+  await shot('smoke-compact-again.png');
+  console.log('[smoke] Esc 清空', JSON.stringify(compacted));
+
   // 锁定 provider 的语法。
   await type('文件 ' + query);
   await shot('smoke-scoped.png');

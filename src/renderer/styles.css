@@ -52,6 +52,16 @@ body {
   flex: 0 0 auto;
 }
 
+/* 紧凑态：唤起后还没输入时，只留搜索框，界面和窗口一起收成一行高。 */
+.launcher.compact .search-row {
+  border-bottom: 0;
+}
+
+.launcher.compact .status-bar,
+.launcher.compact .empty {
+  display: none;
+}
+
 .search-icon {
   width: 18px;
   height: 18px;

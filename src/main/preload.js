@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('launcher', {
   activate: (id) => ipcRenderer.invoke('launcher:activate', { id }),
   avatar: (id) => ipcRenderer.invoke('launcher:avatar', id),
   status: () => ipcRenderer.invoke('launcher:status'),
+  setCompact: (payload) => ipcRenderer.invoke('launcher:setCompact', payload),
   hide: () => ipcRenderer.invoke('launcher:hide'),
   reindex: () => ipcRenderer.invoke('launcher:reindex'),
   openExternal: (url) => ipcRenderer.invoke('launcher:openExternal', url),
