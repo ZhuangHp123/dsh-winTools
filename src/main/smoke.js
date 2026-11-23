@@ -177,10 +177,8 @@ async function run({ app, win, query }) {
   const statusResult = await win.webContents.executeJavaScript('window.launcher.status()');
   console.log('[smoke] 状态', JSON.stringify(statusResult));
 
-  // 设置页：能打开、能列出全部范围、默认值提示非空。
-  await win.webContents.executeJavaScript(`
-    (() => { document.getElementById('open-settings').click(); return true; })()
-  `);
+  // 设置页：托盘菜单是唯一入口，这里直接走同一条 IPC 通道触发。
+  win.webContents.send('launcher:openSettings');
   await new Promise((resolve) => setTimeout(resolve, 700));
   const settingsState = await win.webContents.executeJavaScript(`
     (() => {

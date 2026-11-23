@@ -220,6 +220,19 @@ function showWindow() {
 }
 
 /**
+ * 从托盘「自定义搜索前缀…」唤起设置页。
+ * 必须等界面收完 launcher:shown（它会清空输入并收回紧凑态）再发，
+ * 否则两条消息竞争，设置页刚打开就被复位。
+ */
+function openSettingsWindow() {
+  if (!win) return;
+  showWindow();
+  win.webContents.send('launcher:openSettings');
+  if (!win.isVisible()) win.show();
+  win.focus();
+}
+
+/**
  * 重新显示但不重置界面。执行失败时用：此时用户还停在原来的搜索结果上，
  * 清空输入（launcher:shown 的行为）等于让他重搜一遍。
  */
@@ -261,6 +274,7 @@ function createTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: '显示搜索', click: () => showWindow() },
+      { label: '自定义搜索前缀…', click: () => openSettingsWindow() },
       { label: '重新索引文件', click: () => reindexFiles() },
       {
         label: '登录钉钉（联系人/文档）',

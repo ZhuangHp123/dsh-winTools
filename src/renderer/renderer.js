@@ -18,7 +18,6 @@ const searchRowEl = document.querySelector('.search-row');
 const settingsEl = document.getElementById('settings');
 const settingsListEl = document.getElementById('settings-list');
 const settingsMsgEl = document.getElementById('settings-msg');
-const gearBtn = document.getElementById('open-settings');
 
 const KIND_LABEL = {
   app: '应用',
@@ -704,10 +703,9 @@ setCompact(true);
 
 /* ── 设置页按钮与快捷键 ───────────────────────────────────── */
 
-gearBtn.addEventListener('click', (event) => {
-  event.preventDefault();
-  if (settingsOpen) closeSettings();
-  else openSettings();
+// 托盘右键「自定义搜索前缀…」是设置页唯一的入口。
+window.launcher.onOpenSettings(() => {
+  if (!settingsOpen) openSettings();
 });
 
 // 设置列表里的输入框：回车保存，Esc 取消。

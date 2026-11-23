@@ -364,34 +364,6 @@ body {
 
 /* ── 设置：前缀编辑 ───────────────────────────────────────── */
 
-.gear-btn {
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-faint);
-  cursor: pointer;
-}
-
-.gear-btn:hover {
-  color: var(--fg);
-  background: var(--bg-row-hover);
-}
-
-.gear-btn svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-}
-
 .settings {
   flex-direction: column;
   min-height: 0;

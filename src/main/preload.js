@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('launcher', {
     ipcRenderer.on('launcher:shown', handler);
     return () => ipcRenderer.removeListener('launcher:shown', handler);
   },
+  onOpenSettings: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('launcher:openSettings', handler);
+    return () => ipcRenderer.removeListener('launcher:openSettings', handler);
+  },
   onStatus: (callback) => {
     const handler = (_event, status) => callback(status);
     ipcRenderer.on('launcher:status', handler);
