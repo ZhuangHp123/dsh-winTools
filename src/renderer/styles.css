@@ -470,6 +470,11 @@ body {
   border-color: rgba(255, 197, 66, 0.5);
 }
 
+.settings-input.invalid {
+  border-color: rgba(255, 107, 107, 0.65);
+  color: #ffb3b3;
+}
+
 .settings-reset {
   flex: 0 0 auto;
   font-size: 11px;

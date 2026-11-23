@@ -3,25 +3,25 @@
 /**
  * 搜索前缀（锁定范围的「首词」）。
  *
- * provider 自己只认"我有哪些别名"，具体别名从这份配置来：
- * 默认值就是以前写死在每个 provider 里的那套，用户可以在 config.json
- * 的 prefixes 字段里覆盖任意一项，改完重启生效。
+ * 每个范围只允许一个前缀（不含空白的单串，中英文/符号均可），用「前缀 + 空格」锁定范围。
+ * 默认值可以在设置页或 config.json 的 prefixes 字段里改，存的是单个字符串。
+ * 旧版存数组的配置也能读：取第一个合法词。
  *
  * 一个 scope 对应一个"可锁定范围"，和 provider 不是一一对应：
  * chrome 一个 provider 带 网页 / 收藏夹 / 标签页 三个 scope。
  */
 
-/** scope → 默认前缀。顺序有意义：越靠前的越容易被推荐展示。 */
+/** scope → 默认前缀（单个英文词）。 */
 const DEFAULT_PREFIXES = {
-  app: ['应用', 'apps', 'program', '程序', 'a'],
-  project: ['项目', 'projects', 'project', 'proj', 'p'],
-  web: ['网页', 'chrome', 'web', 'webpage', '浏览器'],
-  bookmark: ['收藏夹', '书签', 'b'],
-  tab: ['标签页', 'w'],
-  contact: ['联系人', '通讯录', '钉钉', 'dingtalk', 'contact', 'contacts', 'c', 'dc'],
-  doc: ['文档', '钉钉文档', 'dingdoc', 'doc', 'docs', 'dd'],
-  file: ['文件', 'files', 'file', 'f'],
-  clipboard: ['剪贴板', 'clip', 'clipboard', 'cb', 'v'],
+  app: 'a',
+  project: 'p',
+  web: 'web',
+  bookmark: 'b',
+  tab: 'w',
+  contact: 'c',
+  doc: 'd',
+  file: 'f',
+  clipboard: 'v',
 };
 
 /** scope → 界面上的显示名（徽标、提示文案都用它）。 */
@@ -40,48 +40,95 @@ const SCOPE_LABEL = {
 /** chrome 一个 provider 覆盖的三个 scope。 */
 const WEB_SCOPES = ['web', 'bookmark', 'tab'];
 
+/** 合法前缀：任意非空、不含空白的字符串（中文英文符号都行，长度不限）。 */
+const WHITESPACE = /\s/;
+
+function isPrefixWord(word) {
+  return typeof word === 'string' && word.length > 0 && !WHITESPACE.test(word);
+}
+
+/**
+ * 读一个配置值。
+ * 兼容旧版数组（挑第一个合法的单个词）；空值视为"用默认"，非法值单独标出来。
+ * @returns {{word:string|null, empty:boolean, illegal:boolean}}
+ */
+function prefixCandidate(value) {
+  if (Array.isArray(value)) {
+    const words = value.filter((entry) => typeof entry === 'string').map((entry) => entry.trim());
+    const valid = words.find(isPrefixWord);
+    if (valid) return { word: valid, empty: false, illegal: false };
+    const hasText = words.some(Boolean);
+    return { word: null, empty: !hasText, illegal: hasText };
+  }
+  if (typeof value !== 'string') return { word: null, empty: false, illegal: true };
+  // 只认单个词：带空白的（"a b"）算非法，提示用户只能留一个。
+  const word = value.trim();
+  if (!word) return { word: null, empty: true, illegal: false };
+  if (WHITESPACE.test(word)) return { word: null, empty: false, illegal: true };
+  return { word, empty: false, illegal: false };
+}
+
+/** 规整成单个合法前缀，否则 null。 */
+function normalizePrefix(value) {
+  return prefixCandidate(value).word;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
  * 合并用户配置与默认值。
  *
- * 规则刻意保守：
- * - 只认已知 scope，未知键丢弃（写错名字不该凭空多出个能锁定的范围）；
- * - 值必须是字符串数组，非空才生效，否则整项回退默认；
- * - 大小写不同的重复项只留第一个；
- * - 同一个词被两个 scope 认领时，按 SCOPE_ORDER 先到先得，后者剔除并记一条冲突。
+ * 两阶段，保证"默认值的位置不会被别的范围的自定义值挤掉"：
+ * 1. 先把所有没配自定义的范围按默认值占位；
+ * 2. 再给配了自定义的范围占位——撞到已占的词就把这条自定义判为冲突、
+ *    回退该范围自己的默认值；默认值也被占（两个范围都填了同一个词）才置空。
+ *
+ * @returns {{prefixes:Object<string,string|null>, conflicts:Array, invalid:Array}}
  */
 function resolvePrefixes(overrides = {}) {
+  const source = isPlainObject(overrides) ? overrides : {};
+  const scopes = Object.keys(DEFAULT_PREFIXES);
   const prefixes = {};
   const conflicts = [];
+  const invalid = [];
   const owner = new Map();
 
-  for (const scope of Object.keys(DEFAULT_PREFIXES)) {
-    const custom = overrides?.[scope];
-    const trimmed =
-      Array.isArray(custom) && custom.every((entry) => typeof entry === 'string')
-        ? custom.map((entry) => entry.trim()).filter(Boolean)
-        : [];
-    // 空数组也算"没配好"：把某一类的前缀清空等于让它彻底锁不上，
-    // 这通常不是用户本意，回退默认更安全。
-    const list = trimmed.length > 0 ? trimmed : DEFAULT_PREFIXES[scope];
+  const reserve = (scope, word) => {
+    const key = word.toLowerCase();
+    const takenBy = owner.get(key);
+    if (takenBy) return takenBy;
+    owner.set(key, scope);
+    prefixes[scope] = word;
+    return null;
+  };
 
-    const seen = new Set();
-    const kept = [];
-    for (const word of list) {
-      const key = word.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const takenBy = owner.get(key);
-      if (takenBy && takenBy !== scope) {
-        conflicts.push({ word, kept: takenBy, dropped: scope });
-        continue;
-      }
-      owner.set(key, scope);
-      kept.push(word);
-    }
-    prefixes[scope] = kept;
+  // 阶段 1：没配自定义（或配了空值）的范围先拿默认值。
+  const candidates = {};
+  for (const scope of scopes) {
+    const has = Object.prototype.hasOwnProperty.call(source, scope);
+    const candidate = has ? prefixCandidate(source[scope]) : { word: null, empty: true, illegal: false };
+    candidates[scope] = candidate;
+    if (has && candidate.illegal) invalid.push({ scope, value: source[scope] });
+    if (!candidate.word) reserve(scope, DEFAULT_PREFIXES[scope]);
   }
 
-  return { prefixes, conflicts };
+  // 阶段 2：自定义值占位，撞车就回退默认。
+  for (const scope of scopes) {
+    const candidate = candidates[scope];
+    if (!candidate.word) continue;
+    const clash = reserve(scope, candidate.word);
+    if (!clash) continue;
+    conflicts.push({ word: candidate.word, kept: clash, dropped: scope });
+    const fallback = DEFAULT_PREFIXES[scope];
+    if (reserve(scope, fallback)) {
+      // 自己的默认值也被占了：这个范围只能暂时锁不上。
+      prefixes[scope] = null;
+    }
+  }
+
+  return { prefixes, conflicts, invalid };
 }
 
 /** 某个 provider 要注册的全部别名（多 scope 的取并集）。 */
@@ -89,12 +136,12 @@ function aliasesFor(prefixes, scopes) {
   const out = [];
   const seen = new Set();
   for (const scope of scopes) {
-    for (const word of prefixes[scope] ?? []) {
-      const key = word.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(word);
-    }
+    const word = prefixes?.[scope];
+    if (typeof word !== 'string' || !word) continue;
+    const key = word.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(word);
   }
   return out;
 }
@@ -103,36 +150,28 @@ function aliasesFor(prefixes, scopes) {
 function scopeForWord(prefixes, word) {
   const key = String(word ?? '').trim().toLowerCase();
   if (!key) return null;
-  for (const [scope, list] of Object.entries(prefixes)) {
-    if (list.some((entry) => entry.toLowerCase() === key)) return scope;
+  for (const [scope, prefix] of Object.entries(prefixes ?? {})) {
+    if (typeof prefix === 'string' && prefix.toLowerCase() === key) return scope;
   }
   return null;
 }
 
-/**
- * 提示文案用的短前缀：优先取单字符 ASCII 别名（a / f / b …），
- * 没有就取最短的 ASCII 词，再没有就退回列表第一个（可能是中文）。
- */
-function shortAlias(prefixes, scope) {
-  const list = prefixes[scope] ?? [];
-  const ascii = list.filter((word) => /^[a-z0-9]+$/i.test(word));
-  const single = ascii.find((word) => word.length === 1);
-  if (single) return single;
-  if (ascii.length > 0) return ascii.reduce((best, word) => (word.length < best.length ? word : best));
-  return list[0] ?? '';
+/** 某范围当前的前缀；没有就返回空串。 */
+function prefixOf(prefixes, scope) {
+  const word = prefixes?.[scope];
+  return typeof word === 'string' ? word : '';
 }
 
-/** 空状态提示需要的 [{scope,label,alias}]，顺序固定，便于界面和测试对齐。 */
+/** 空状态提示需要的 [{scope,label,prefix}]，顺序固定，便于界面和测试对齐。 */
 function hintEntries(prefixes) {
   return Object.keys(SCOPE_LABEL)
-    .map((scope) => ({ scope, label: SCOPE_LABEL[scope], alias: shortAlias(prefixes, scope) }))
-    .filter((entry) => entry.alias);
+    .map((scope) => ({ scope, label: SCOPE_LABEL[scope], prefix: prefixOf(prefixes, scope) }))
+    .filter((entry) => entry.prefix);
 }
 
-/** 两个前缀列表是否等价（大小写不敏感、顺序敏感）。 */
-function sameList(a, b) {
-  if (a.length !== b.length) return false;
-  return a.every((word, index) => word.toLowerCase() === String(b[index]).toLowerCase());
+/** 与默认值比较（大小写不敏感）。 */
+function isDefault(prefixes, scope) {
+  return String(prefixes?.[scope] ?? '').toLowerCase() === DEFAULT_PREFIXES[scope].toLowerCase();
 }
 
 /**
@@ -142,8 +181,9 @@ function sameList(a, b) {
 function diffPrefixes(prefixes) {
   const out = {};
   for (const scope of Object.keys(DEFAULT_PREFIXES)) {
-    const list = prefixes[scope] ?? [];
-    if (!sameList(list, DEFAULT_PREFIXES[scope])) out[scope] = [...list];
+    const word = prefixes?.[scope];
+    if (typeof word !== 'string' || !word) continue;
+    if (!isDefault(prefixes, scope)) out[scope] = word;
   }
   return out;
 }
@@ -152,10 +192,13 @@ module.exports = {
   DEFAULT_PREFIXES,
   SCOPE_LABEL,
   WEB_SCOPES,
+  isPrefixWord,
+  normalizePrefix,
   resolvePrefixes,
   aliasesFor,
   scopeForWord,
-  shortAlias,
+  prefixOf,
   hintEntries,
+  isDefault,
   diffPrefixes,
 };

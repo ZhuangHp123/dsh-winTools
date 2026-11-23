@@ -200,9 +200,14 @@ async function run({ app, win, query }) {
   await shot('smoke-settings.png');
   console.log('[smoke] 设置页', JSON.stringify(settingsState));
 
-  // 改一个前缀并保存：只动冒烟专用的 config.json，不碰真实配置。
+  // 改前缀并保存（中文、多字符都合法）：只动冒烟专用的 config.json，不碰真实配置。
+  const badResult = await win.webContents.executeJavaScript(
+    `window.launcher.savePrefixes({ app: '应用 apps' })`,
+  );
+  console.log('[smoke] 含空格应被拒绝', JSON.stringify({ ok: badResult?.ok, message: badResult?.message }));
+
   const saveResult = await win.webContents.executeJavaScript(
-    `window.launcher.savePrefixes({ app: ['app', '软件'], bookmark: ['收藏', 'bm'] })`,
+    `window.launcher.savePrefixes({ app: '应用', bookmark: '书签' })`,
   );
   console.log('[smoke] 保存前缀', JSON.stringify({ ok: saveResult?.ok, saved: saveResult?.saved }));
   const afterSave = await win.webContents.executeJavaScript(

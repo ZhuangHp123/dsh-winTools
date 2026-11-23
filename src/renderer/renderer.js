@@ -68,15 +68,19 @@ function escapeHtml(value) {
  */
 const PROVIDER_KIND = { chrome: 'web', dingtalk: 'contact', dingdoc: 'doc' };
 
-/** 配置里的前缀表：scope → 中文名、alias → scope。主进程随 status 下发。 */
+/** 配置里的前缀表：scope → 中文名、scope → 前缀、前缀 → scope。主进程随 status 下发。 */
 let scopeLabel = {};
+let scopePrefix = {};
 let aliasScope = {};
 
 function applyPrefixConfig(next) {
   if (Array.isArray(next?.hint)) {
     scopeLabel = {};
+    scopePrefix = {};
     for (const entry of next.hint) {
-      if (entry?.scope) scopeLabel[entry.scope] = entry.label;
+      if (!entry?.scope) continue;
+      scopeLabel[entry.scope] = entry.label;
+      if (entry.prefix) scopePrefix[entry.scope] = entry.prefix;
     }
   }
   if (next?.aliasScope && typeof next.aliasScope === 'object') {
@@ -264,7 +268,7 @@ function renderEmpty(query) {
     // 提示里列哪些前缀完全由配置决定：用户把 a 改成 app，这里就跟着显示 app。
     const hint = Array.isArray(status.hint) ? status.hint : [];
     emptyEl.textContent = hint.length > 0
-      ? `输入关键字开始搜索；${hint.map((entry) => `${entry.alias} ${entry.label}`).join(' / ')} 可锁定范围`
+      ? `输入关键字开始搜索；${hint.map((entry) => `${entry.prefix} ${entry.label}`).join(' / ')} 可锁定范围`
       : '输入关键字开始搜索';
   } else if (status.indexing) {
     emptyEl.textContent = '没有匹配结果（文件索引仍在构建中，稍后再试）';
@@ -408,16 +412,13 @@ function move(delta) {
 
 /* ── 设置：自定义搜索前缀 ─────────────────────────────────── */
 
-/** 一次编辑会话的快照：用来判断是否有未保存改动、以及取消时还原。 */
+/** 一次编辑会话的快照：用来判断是否有未保存改动。 */
 let settingsSnapshot = null;
 let settingsDefaults = {};
 
-/** 把输入框里的一串词拆成前缀数组：空格、逗号、斜杠都当分隔符。 */
-function splitPrefixes(text) {
-  return String(text ?? '')
-    .split(/[\s,，、/]+/)
-    .map((word) => word.trim())
-    .filter(Boolean);
+/** 合法前缀：单个不含空白的词，中文英文符号都行，和后端校验保持一致。 */
+function isValidPrefix(word) {
+  return typeof word === 'string' && word.length > 0 && !/\s/.test(word);
 }
 
 function setSettingsMsg(text, tone) {
@@ -426,6 +427,14 @@ function setSettingsMsg(text, tone) {
   settingsMsgEl.classList.toggle('ok', tone === 'ok');
 }
 
+function samePrefix(a, b) {
+  return String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
+}
+
+/**
+ * 画设置表单。每类一行，只一个输入框。
+ * 输入时立刻做本地校验：含空白就标红并提示，不用等保存才报错。
+ */
 function renderSettingsRows(prefixes) {
   settingsListEl.textContent = '';
   const order = Array.isArray(status.hint) && status.hint.length > 0
@@ -447,20 +456,23 @@ function renderSettingsRows(prefixes) {
     input.id = `prefix-input-${scope}`;
     input.spellcheck = false;
     input.autocomplete = 'off';
-    input.value = (prefixes[scope] ?? []).join(' ');
-    input.placeholder = (settingsDefaults[scope] ?? []).join(' ');
+    input.value = prefixes[scope] ?? '';
+    input.placeholder = settingsDefaults[scope] ?? '';
     input.addEventListener('input', () => {
-      const changed = !sameWords(splitPrefixes(input.value), prefixes[scope] ?? []);
-      input.classList.toggle('changed', changed);
+      const value = input.value.trim();
+      const illegal = value.length > 0 && !isValidPrefix(value);
+      input.classList.toggle('invalid', illegal);
+      input.classList.toggle('changed', !illegal && !samePrefix(value, prefixes[scope]));
     });
 
     const reset = document.createElement('button');
     reset.type = 'button';
     reset.className = 'settings-reset';
     reset.textContent = '默认';
-    reset.title = `恢复为 ${(settingsDefaults[scope] ?? []).join(' / ')}`;
+    reset.title = `恢复为 ${settingsDefaults[scope] ?? ''}`;
     reset.addEventListener('click', () => {
-      input.value = (settingsDefaults[scope] ?? []).join(' ');
+      input.value = settingsDefaults[scope] ?? '';
+      input.classList.remove('invalid');
       input.classList.remove('changed');
       input.focus();
     });
@@ -470,19 +482,26 @@ function renderSettingsRows(prefixes) {
   }
 }
 
-/** 收集当前表单值；空输入原样传空数组，由主进程回退默认。 */
+/** 收集表单值：空串表示用默认；有非法值就返回错误。 */
 function collectSettings() {
   const out = {};
   for (const li of settingsListEl.children) {
+    const scope = li.dataset.scope;
     const input = li.querySelector('.settings-input');
-    out[li.dataset.scope] = splitPrefixes(input.value);
+    const value = input.value.trim();
+    if (value && !isValidPrefix(value)) {
+      return { ok: false, message: `「${scopeLabel[scope] ?? scope}」只能填一个前缀，不能含空格` };
+    }
+    out[scope] = value;
   }
-  return out;
+  return { ok: true, prefixes: out };
 }
 
-function sameWords(a, b) {
-  if (a.length !== b.length) return false;
-  return a.every((word, index) => word.toLowerCase() === String(b[index]).toLowerCase());
+/** 把生效中的前缀表拍平成快照（用于判断改动）。 */
+function collectSnapshotShape(prefixes) {
+  const out = {};
+  for (const [scope, word] of Object.entries(prefixes)) out[scope] = word ?? '';
+  return out;
 }
 
 async function openSettings() {
@@ -519,12 +538,6 @@ async function openSettings() {
   first?.select?.();
 }
 
-function collectSnapshotShape(prefixes) {
-  const out = {};
-  for (const [scope, list] of Object.entries(prefixes)) out[scope] = [...list];
-  return out;
-}
-
 /** 设置页里的行过滤：按范围名或该行已有前缀匹配，空串显示全部。 */
 function filterSettingsRows(text) {
   const needle = String(text ?? '').trim().toLowerCase();
@@ -546,10 +559,15 @@ function closeSettings() {
 }
 
 async function saveSettings() {
-  const prefixes = collectSettings();
+  const collected = collectSettings();
+  if (!collected.ok) {
+    setSettingsMsg(collected.message, 'warn');
+    return;
+  }
+  const prefixes = collected.prefixes;
   const changed = [];
-  for (const [scope, list] of Object.entries(prefixes)) {
-    if (!sameWords(list, settingsSnapshot?.[scope] ?? [])) changed.push(scopeLabel[scope] ?? scope);
+  for (const [scope, word] of Object.entries(prefixes)) {
+    if (!samePrefix(word, settingsSnapshot?.[scope])) changed.push(scopeLabel[scope] ?? scope);
   }
   if (changed.length === 0) {
     setSettingsMsg('没有改动', '');
@@ -578,9 +596,9 @@ async function saveSettings() {
   const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
   if (conflicts.length > 0) {
     const detail = conflicts
-      .map((conflict) => `「${conflict.word}」保留在 ${scopeLabel[conflict.kept] ?? conflict.kept}`)
+      .map((conflict) => `「${conflict.word}」已被「${scopeLabel[conflict.kept] ?? conflict.kept}」占用，${scopeLabel[conflict.dropped] ?? conflict.dropped} 回到默认`)
       .join('；');
-    setSettingsMsg(`已保存；冲突已按顺序处理：${detail}`, 'warn');
+    setSettingsMsg(`已保存；${detail}`, 'warn');
   } else {
     setSettingsMsg(`已保存：${changed.join('、')}`, 'ok');
   }

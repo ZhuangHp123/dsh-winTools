@@ -28,6 +28,7 @@ const {
   scopeForWord,
   hintEntries,
   diffPrefixes,
+  isPrefixWord,
   WEB_SCOPES,
 } = require('../core/prefixes');
 const { readConfigFile, writeConfigFile } = require('./configFile');
@@ -319,7 +320,7 @@ function buildProviders() {
   // 前缀（锁定范围的首词）允许在 config.json 里改，也能在设置页里改。
   const { prefixes, conflicts } = resolvePrefixes(config.prefixes);
   for (const conflict of conflicts) {
-    startupErrors.push(`前缀「${conflict.word}」同时给了「${conflict.kept}」和「${conflict.dropped}」，已按前者生效`);
+    startupErrors.push(`前缀「${conflict.word}」和「${SCOPE_LABEL[conflict.kept]}」重复，已恢复「${SCOPE_LABEL[conflict.dropped]}」的默认值`);
   }
   prefixTable = prefixes;
   // 每次判定都读全局 prefixTable：设置页保存后热更新，不需要重建 provider。
@@ -567,7 +568,7 @@ function collectStatus() {
       dingtalkNotice,
       ...startupErrors,
       ...prefixConflicts.map(
-        (conflict) => `前缀「${conflict.word}」冲突：保留了「${conflict.kept}」`,
+        (conflict) => `前缀「${conflict.word}」与「${SCOPE_LABEL[conflict.kept]}」重复，已回退默认`,
       ),
     ].filter(Boolean),
     indexing: Boolean(fileProvider?.isIndexing?.()),
@@ -594,8 +595,9 @@ function collectStatus() {
 function prefixAliasScope() {
   const map = {};
   if (!prefixTable) return map;
-  for (const [scope, words] of Object.entries(prefixTable)) {
-    for (const word of words) map[String(word).toLowerCase()] = scope;
+  for (const [scope, word] of Object.entries(prefixTable)) {
+    if (typeof word !== 'string' || !word) continue;
+    map[word.toLowerCase()] = scope;
   }
   return map;
 }
@@ -736,8 +738,9 @@ function registerIpc() {
 
   /**
    * 保存前缀。
-   * 界面传来的是整套前缀；这里先校验、算冲突，再只把「与默认不同」的部分
-   * 写回 config.json（不覆盖用户手写的其他字段），最后热更新内存里的表。
+   * 界面传来的是「范围 → 单个前缀」；这里做合法性校验、算冲突，
+   * 再只把「与默认不同」的部分写回 config.json（不覆盖用户手写的其他字段），
+   * 最后热更新内存里的表。空串表示恢复该范围默认。
    */
   ipcMain.handle('launcher:savePrefixes', async (_event, payload) => {
     const overrides = payload?.prefixes;
@@ -745,17 +748,24 @@ function registerIpc() {
       return { ok: false, message: '前缀格式不正确' };
     }
 
-    // 先做静态校验：每一项都该是非空字符串数组，坏数据不落盘。
+    // 静态校验：每项要么是空串（用默认），要么是单个不含空白的词。
+    // 空串在这里先剔掉，交给 resolvePrefixes 当"没配"处理。
+    const cleaned = {};
     for (const scope of Object.keys(DEFAULT_PREFIXES)) {
-      const list = overrides[scope];
-      if (list == null) continue;
-      if (!Array.isArray(list)) return { ok: false, message: `「${SCOPE_LABEL[scope]}」必须是字符串数组` };
-      if (!list.every((entry) => typeof entry === 'string' && entry.trim())) {
-        return { ok: false, message: `「${SCOPE_LABEL[scope]}」里有空项或非字符串` };
+      const raw = overrides[scope];
+      if (raw == null) continue;
+      if (typeof raw !== 'string') {
+        return { ok: false, message: `「${SCOPE_LABEL[scope]}」前缀必须是字符串` };
       }
+      const word = raw.trim();
+      if (!word) continue;
+      if (!isPrefixWord(word)) {
+        return { ok: false, message: `「${SCOPE_LABEL[scope]}」只能填一个前缀，不能含空格` };
+      }
+      cleaned[scope] = word;
     }
 
-    const { prefixes, conflicts } = resolvePrefixes(overrides);
+    const { prefixes, conflicts } = resolvePrefixes(cleaned);
 
     const filePath = userDataPath('config.json');
     const existing = readConfigFile(filePath);
