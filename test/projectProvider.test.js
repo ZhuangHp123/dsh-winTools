@@ -12,11 +12,16 @@ const assert = require('node:assert');
 const {
   parseRecentProjectsXml,
   readRecentProjects,
+  readVscodeRecentProjects,
+  readRecentlyOpenedPaths,
+  resolveProjectIde,
   scanProjectRoots,
   mergeProjects,
   projectToCandidate,
   createProjectProvider,
   findIdeaExecutable,
+  editorExecutableCandidates,
+  findEditorExecutable,
   launchIdea,
   toWindowsPath,
 } = require('../src/projects/projectProvider');
@@ -272,11 +277,49 @@ test('provider：activate 用 idea64.exe 打开项目路径', async () => {
   const [candidate] = provider.search();
   const result = await provider.activate(candidate);
 
-  assert.deepEqual(result, { opened: 'D:\\cfDev\\cfmoto', idea: 'D:\\idea\\idea64.exe' });
+  assert.deepEqual(result, { opened: 'D:\\cfDev\\cfmoto', ide: 'idea', exe: 'D:\\idea\\idea64.exe' });
   assert.equal(spawned.length, 1);
   assert.equal(spawned[0].exe, 'D:\\idea\\idea64.exe');
   assert.deepEqual(spawned[0].args, ['D:\\cfDev\\cfmoto']);
   assert.equal(spawned[0].opts.detached, true);
+});
+
+test('provider：项目用 Cursor 打开时调 Cursor.exe，候选带 Cursor 图标源', async () => {
+  const spawned = [];
+  const provider = createProjectProvider({
+    readRecent: () => [],
+    readVscodeRecent: () => [
+      { path: 'D:\\cfDev\\cfmoto', customName: null, openedAt: 0, ides: ['cursor'] },
+    ],
+    scan: () => [],
+    findExecutable: (ide) =>
+      ({ idea: 'D:\\idea\\idea64.exe', cursor: 'D:\\cursor\\Cursor.exe', vscode: null })[ide] ?? null,
+    spawn: (exe, args) => {
+      spawned.push({ exe, args });
+      return { unref() {}, on() {} };
+    },
+  });
+  await provider.init();
+  const [candidate] = provider.search();
+  assert.equal(candidate.ide, 'cursor');
+  assert.equal(candidate.iconFile, 'D:\\cursor\\Cursor.exe');
+
+  const result = await provider.activate(candidate);
+  assert.equal(result.ide, 'cursor');
+  assert.equal(spawned[0].exe, 'D:\\cursor\\Cursor.exe');
+});
+
+test('provider：Cursor 没装时 activate 报错并指向 cursorPath', async () => {
+  const provider = createProjectProvider({
+    readRecent: () => [],
+    readVscodeRecent: () => [
+      { path: 'D:\\cfDev\\cfmoto', customName: null, openedAt: 0, ides: ['cursor'] },
+    ],
+    scan: () => [],
+    findExecutable: () => null,
+  });
+  await provider.init();
+  await assert.rejects(() => provider.activate(provider.search()[0]), /cursorPath/);
 });
 
 test('provider：找不到 IDEA 时 activate 抛出可操作的错误', async () => {
@@ -286,7 +329,7 @@ test('provider：找不到 IDEA 时 activate 抛出可操作的错误', async ()
     findIdeaExecutable: () => null,
   });
   await provider.init();
-  await assert.rejects(() => provider.activate(provider.search()[0]), /未找到 IntelliJ IDEA/);
+  await assert.rejects(() => provider.activate(provider.search()[0]), /IntelliJ IDEA/);
 });
 
 test('provider：缺少路径时 activate 抛 invalid_item', async () => {
@@ -297,6 +340,98 @@ test('provider：缺少路径时 activate 抛 invalid_item', async () => {
   });
   await provider.init();
   await assert.rejects(() => provider.activate({}), (error) => error.code === 'invalid_item');
+});
+
+test('scanProjectRoots 同时识别 .idea / .cursor / .vscode 标记', () => {
+  const readdirSync = fakeReaddir({
+    'D:\\r': ['a/', 'b/', 'c/', 'none/'],
+    'D:\\r\\a': ['.idea/'],
+    'D:\\r\\b': ['.cursor/', 'src/'],
+    'D:\\r\\c': ['.vscode/', '.idea/'],
+    'D:\\r\\none': ['src/'],
+  });
+  const projects = scanProjectRoots({ roots: ['D:\\r'], exists: () => true, readdirSync });
+  const byName = Object.fromEntries(projects.map((p) => [p.path.slice(-1), p.ides.sort()]));
+  assert.deepEqual(byName, { a: ['idea'], b: ['cursor'], c: ['idea', 'vscode'] });
+});
+
+test('resolveProjectIde：双标记时用编辑时间更新的那个 IDE', () => {
+  const project = { path: 'D:\\p\\x', ides: ['idea', 'cursor'] };
+  const newerCursor = (target) => ({
+    mtimeMs: target.endsWith('.idea\\workspace.xml') ? 1000 : 2000,
+  });
+  assert.equal(resolveProjectIde(project, { statSync: newerCursor }), 'cursor');
+
+  const newerIdea = (target) => ({ mtimeMs: target.endsWith('.cursor') ? 500 : 9000 });
+  assert.equal(resolveProjectIde(project, { statSync: newerIdea }), 'idea');
+
+  assert.equal(resolveProjectIde({ path: 'D:\\p\\y', ides: ['vscode'] }), 'vscode');
+});
+
+test('readRecentlyOpenedPaths：只认 folderUri，忽略单文件条目', () => {
+  const db = {
+    prepare: () => ({
+      get: () => ({
+        value: JSON.stringify({
+          entries: [
+            { folderUri: 'file:///d%3A/cfDev/cfmoto' },
+            { fileUri: 'file:///c%3A/Desktop/a.sql' },
+            { workspace: { configPath: 'file:///d%3A/cfDev/all.code-workspace' } },
+          ],
+        }),
+      }),
+    }),
+    close() {},
+  };
+  const entries = readRecentlyOpenedPaths('fake.vscdb', () => db);
+  assert.equal(entries.length, 3);
+
+  const projects = readVscodeRecentProjects({
+    appData: 'C:\\AppData',
+    exists: (p) => !p.endsWith('Code\\User\\globalStorage\\state.vscdb') && !p.endsWith('.sql'),
+    openDatabase: () => db,
+  });
+  const paths = projects.map((p) => p.path.toLowerCase()).sort();
+  assert.deepEqual(paths, ['d:\\cfdev', 'd:\\cfdev\\cfmoto']);
+  assert.deepEqual(projects.map((p) => p.ides[0]), ['cursor', 'cursor']);
+});
+
+test('editorExecutableCandidates：找到便携目录下的 Cursor / VS Code', () => {
+  const listDirs = (dir) => ({ 'D:\\': ['cursor', 'Microsoft VS Code', 'other'] }[dir] ?? []);
+  assert.deepEqual(editorExecutableCandidates('cursor', { SystemDrive: 'C:' }, listDirs), [
+    'D:\\cursor\\Cursor.exe',
+  ]);
+  assert.deepEqual(editorExecutableCandidates('vscode', { SystemDrive: 'C:' }, listDirs), [
+    'D:\\Microsoft VS Code\\Code.exe',
+  ]);
+  assert.equal(
+    findEditorExecutable('cursor', {
+      env: {},
+      listDirs: () => [],
+      exists: (p) => p === 'D:\\x\\Cursor.exe',
+      cursorPath: 'D:\\x\\Cursor.exe',
+    }),
+    'D:\\x\\Cursor.exe',
+  );
+});
+
+test('projectToCandidate：非 IDEA 的 IDE 名进 tags，ide/iconFile 一起带出', () => {
+  const candidate = projectToCandidate({
+    path: 'D:\\cfDev\\cfmoto',
+    ide: 'cursor',
+    iconFile: 'D:\\cursor\\Cursor.exe',
+  });
+  assert.equal(candidate.ide, 'cursor');
+  assert.equal(candidate.iconFile, 'D:\\cursor\\Cursor.exe');
+  assert.ok(candidate.tags.includes('cursor'));
+});
+
+test('mergeProjects 合并双方 ides', () => {
+  const merged = mergeProjects(
+    [{ path: 'D:/p/x', customName: null, openedAt: 1, ides: ['idea'] }],
+    [{ path: 'D:\\p\\x', customName: null, openedAt: 0, ides: ['cursor'] }],
+  );
+  assert.deepEqual(merged[0].ides.sort(), ['cursor', 'idea']);
 });
 
 test('launchIdea 对 .bat 走 shell，对 exe 不走', () => {

@@ -23,6 +23,12 @@
           placeholder="搜索应用、文件、剪贴板…"
         />
         <span class="mode-badge" id="mode" hidden></span>
+        <button class="gear-btn" id="open-settings" title="自定义搜索前缀（Ctrl+,）" aria-label="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.2" />
+            <path d="M12 3.2v2.1M12 18.7v2.1M4.8 12H2.7M21.3 12h-2.1M6.9 6.9 5.4 5.4M18.6 18.6l-1.5-1.5M6.9 17.1l-1.5 1.5M18.6 5.4l-1.5 1.5" />
+          </svg>
+        </button>
       </div>
 
       <ul class="results" id="results" role="listbox"></ul>
@@ -32,6 +38,21 @@
         <span id="status-left" class="status-left"></span>
         <span id="status-right" class="status-right"></span>
       </footer>
+
+      <section class="settings" id="settings" hidden aria-label="搜索前缀设置">
+        <header class="settings-head">
+          <span class="settings-title">自定义搜索前缀</span>
+          <span class="settings-hint">多个词用空格或 / 分隔；清空保存即恢复该类型默认</span>
+        </header>
+        <ul class="settings-list" id="settings-list"></ul>
+        <footer class="settings-foot">
+          <span class="settings-msg" id="settings-msg"></span>
+          <div class="settings-actions">
+            <button class="btn ghost" id="settings-cancel" type="button">取消</button>
+            <button class="btn primary" id="settings-save" type="button">保存</button>
+          </div>
+        </footer>
+      </section>
     </div>
 
     <script src="renderer.js"></script>

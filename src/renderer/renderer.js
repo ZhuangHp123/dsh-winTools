@@ -15,6 +15,10 @@ const modeEl = document.getElementById('mode');
 const statusLeft = document.getElementById('status-left');
 const statusRight = document.getElementById('status-right');
 const searchRowEl = document.querySelector('.search-row');
+const settingsEl = document.getElementById('settings');
+const settingsListEl = document.getElementById('settings-list');
+const settingsMsgEl = document.getElementById('settings-msg');
+const gearBtn = document.getElementById('open-settings');
 
 const KIND_LABEL = {
   app: '应用',
@@ -36,6 +40,8 @@ let status = { indexing: false, fileCount: 0, errors: [] };
 let debounceTimer = null;
 /** 当前是否处于"只有搜索框"的紧凑态。 */
 let compact = false;
+/** 设置视图是否打开。打开时它替换结果区，Esc 优先关它而不是清空搜索。 */
+let settingsOpen = false;
 
 const DEBOUNCE_MS = 60;
 
@@ -62,11 +68,21 @@ function escapeHtml(value) {
  */
 const PROVIDER_KIND = { chrome: 'web', dingtalk: 'contact', dingdoc: 'doc' };
 
-/**
- * 单个字母别名对应的范围标签。同一个 provider 用别名切了子集时
- * （b = 收藏夹、w = 标签页），徽标要跟着变，否则两个都显示"网页"。
- */
-const ALIAS_LABEL = { b: '收藏夹', w: '标签页', dc: '钉钉联系人', dd: '钉钉文档' };
+/** 配置里的前缀表：scope → 中文名、alias → scope。主进程随 status 下发。 */
+let scopeLabel = {};
+let aliasScope = {};
+
+function applyPrefixConfig(next) {
+  if (Array.isArray(next?.hint)) {
+    scopeLabel = {};
+    for (const entry of next.hint) {
+      if (entry?.scope) scopeLabel[entry.scope] = entry.label;
+    }
+  }
+  if (next?.aliasScope && typeof next.aliasScope === 'object') {
+    aliasScope = next.aliasScope;
+  }
+}
 
 function renderMode(providerHint, alias) {
   if (!providerHint) {
@@ -74,9 +90,43 @@ function renderMode(providerHint, alias) {
     modeEl.textContent = '';
     return;
   }
+  // 前缀可配置后，别名对应的子范围（收藏夹 / 标签页）由主进程的 aliasScope 决定；
+  // 命中不到就退回 provider 级的中文名。
+  const scope = alias ? aliasScope[String(alias).toLowerCase()] : null;
   const kind = PROVIDER_KIND[providerHint] ?? providerHint;
   modeEl.hidden = false;
-  modeEl.textContent = ALIAS_LABEL[alias] ?? KIND_LABEL[kind] ?? providerHint;
+  modeEl.textContent =
+    (scope && scopeLabel[scope]) ?? scopeLabel[kind] ?? KIND_LABEL[kind] ?? providerHint;
+}
+
+/** 星形（收藏夹）和标签页形状，用内联 SVG 免得为两个图形引一套图标库。 */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const WEB_GLYPHS = {
+  // 星形：收藏夹
+  bookmark: 'M12 3.2l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.7l6.1-.9z',
+  // 窗口 + 标题栏：已打开的标签页，比纯方块更像"浏览器窗口"
+  tab: 'M3.5 6.5h17v11a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2zM3.5 10.2h17',
+};
+/** 没有本地图标文件的类型，用同样的手法画一个。 */
+const KIND_GLYPHS = {
+  // 剪贴板：夹子 + 纸
+  clipboard: 'M9 4.5h6M9 4.5a1.5 1.5 0 0 0-1.5 1.5v0A1.5 1.5 0 0 0 9 7.5h6a1.5 1.5 0 0 0 1.5-1.5v0A1.5 1.5 0 0 0 15 4.5M7 6.2H5.5A1.5 1.5 0 0 0 4 7.7v11.8A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V7.7a1.5 1.5 0 0 0-1.5-1.5H17',
+  // 文档：折角纸
+  doc: 'M6 3.5h8l4.5 4.5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1zM14 3.5V8h4.5',
+};
+
+function svgGlyph(pathData) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', pathData);
+  svg.appendChild(path);
+  return svg;
+}
+
+function webGlyph(source) {
+  return svgGlyph(WEB_GLYPHS[source === 'bookmark' ? 'bookmark' : 'tab']);
 }
 
 function renderResults() {
@@ -112,7 +162,24 @@ function renderResults() {
       lead.className = `row-avatar av-${avatarTone(item.initials)}`;
       lead.textContent = item.initials;
       if (item.avatarPending) pendingAvatars.set(item.id, lead);
+    } else if (item.icon) {
+      // 应用 / 项目 / 文件：真实程序图标，一眼分清 IDEA、Cursor、Chrome。
+      lead.className = 'row-icon';
+      const img = document.createElement('img');
+      img.src = item.icon;
+      img.alt = '';
+      img.draggable = false;
+      lead.appendChild(img);
+    } else if (kind === 'web') {
+      // 网页没有本地图标文件：收藏夹用金星，已打开标签页用窗口形状。
+      lead.className = `row-glyph glyph-web-${item.source === 'bookmark' ? 'bookmark' : 'tab'}`;
+      lead.appendChild(webGlyph(item.source));
+    } else if (KIND_GLYPHS[kind]) {
+      // 剪贴板 / 文档也没有磁盘实体，画个图形比塞"剪贴板"三个字干净。
+      lead.className = `row-glyph glyph-kind-${escapeHtml(kind)}`;
+      lead.appendChild(svgGlyph(KIND_GLYPHS[kind]));
     } else {
+      // 图标抽失败时的最后兜底：文字标只占位，不当主信息。
       lead.className = `kind-tag ${escapeHtml(kind)}`;
       lead.textContent = KIND_LABEL[kind] ?? kind.slice(0, 2);
     }
@@ -194,8 +261,11 @@ function scrollActiveIntoView() {
 function renderEmpty(query) {
   if (items.length > 0) return;
   if (!query.trim()) {
-    emptyEl.textContent =
-      '输入关键字开始搜索；a 应用 / f 文件 / b 收藏夹 / w 标签页 / p 项目 / c 联系人 / dd 钉钉文档 / v 剪贴板 可锁定范围';
+    // 提示里列哪些前缀完全由配置决定：用户把 a 改成 app，这里就跟着显示 app。
+    const hint = Array.isArray(status.hint) ? status.hint : [];
+    emptyEl.textContent = hint.length > 0
+      ? `输入关键字开始搜索；${hint.map((entry) => `${entry.alias} ${entry.label}`).join(' / ')} 可锁定范围`
+      : '输入关键字开始搜索';
   } else if (status.indexing) {
     emptyEl.textContent = '没有匹配结果（文件索引仍在构建中，稍后再试）';
   } else {
@@ -211,6 +281,11 @@ function setCompact(next) {
   if (compact === next) return;
   compact = next;
   launcherEl.classList.toggle('compact', compact);
+  // 收起会连带把设置视图藏起来；状态要同步，否则下次唤起还停在设置页。
+  if (compact && settingsOpen) {
+    settingsOpen = false;
+    launcherEl.classList.remove('settings-open');
+  }
   // 展开时形状由 CSS 决定，主进程只需恢复默认高度；
   // 收起时把搜索行的真实高度报上去，避免不同 DPI 下留白或裁字。
   // +2 是容器上下各 1px 的边框，否则紧贴时会被裁掉一像素。
@@ -294,6 +369,11 @@ function resetToCompact() {
 }
 
 function scheduleSearch() {
+  if (settingsOpen) {
+    // 设置页里输入框当过滤器用：按范围名或已有前缀筛行。
+    filterSettingsRows(input.value);
+    return;
+  }
   if (!input.value.trim()) {
     resetToCompact();
     return;
@@ -326,9 +406,216 @@ function move(delta) {
   else setActive(next);
 }
 
+/* ── 设置：自定义搜索前缀 ─────────────────────────────────── */
+
+/** 一次编辑会话的快照：用来判断是否有未保存改动、以及取消时还原。 */
+let settingsSnapshot = null;
+let settingsDefaults = {};
+
+/** 把输入框里的一串词拆成前缀数组：空格、逗号、斜杠都当分隔符。 */
+function splitPrefixes(text) {
+  return String(text ?? '')
+    .split(/[\s,，、/]+/)
+    .map((word) => word.trim())
+    .filter(Boolean);
+}
+
+function setSettingsMsg(text, tone) {
+  settingsMsgEl.textContent = text ?? '';
+  settingsMsgEl.classList.toggle('warn', tone === 'warn');
+  settingsMsgEl.classList.toggle('ok', tone === 'ok');
+}
+
+function renderSettingsRows(prefixes) {
+  settingsListEl.textContent = '';
+  const order = Array.isArray(status.hint) && status.hint.length > 0
+    ? status.hint.map((entry) => entry.scope)
+    : Object.keys(prefixes);
+  for (const scope of order) {
+    const label = scopeLabel[scope] ?? scope;
+    const li = document.createElement('li');
+    li.className = 'settings-item';
+    li.dataset.scope = scope;
+
+    const name = document.createElement('span');
+    name.className = 'settings-name';
+    name.textContent = label;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'settings-input';
+    input.id = `prefix-input-${scope}`;
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.value = (prefixes[scope] ?? []).join(' ');
+    input.placeholder = (settingsDefaults[scope] ?? []).join(' ');
+    input.addEventListener('input', () => {
+      const changed = !sameWords(splitPrefixes(input.value), prefixes[scope] ?? []);
+      input.classList.toggle('changed', changed);
+    });
+
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'settings-reset';
+    reset.textContent = '默认';
+    reset.title = `恢复为 ${(settingsDefaults[scope] ?? []).join(' / ')}`;
+    reset.addEventListener('click', () => {
+      input.value = (settingsDefaults[scope] ?? []).join(' ');
+      input.classList.remove('changed');
+      input.focus();
+    });
+
+    li.append(name, input, reset);
+    settingsListEl.appendChild(li);
+  }
+}
+
+/** 收集当前表单值；空输入原样传空数组，由主进程回退默认。 */
+function collectSettings() {
+  const out = {};
+  for (const li of settingsListEl.children) {
+    const input = li.querySelector('.settings-input');
+    out[li.dataset.scope] = splitPrefixes(input.value);
+  }
+  return out;
+}
+
+function sameWords(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((word, index) => word.toLowerCase() === String(b[index]).toLowerCase());
+}
+
+async function openSettings() {
+  setSettingsMsg('');
+  let data = null;
+  try {
+    data = await window.launcher.getPrefixes();
+  } catch (error) {
+    setSettingsMsg(`读取设置失败：${error?.message ?? error}`, 'warn');
+  }
+  const prefixes = data?.prefixes ?? {};
+  settingsDefaults = data?.defaults ?? {};
+  if (data?.labels && typeof data.labels === 'object') {
+    // 范围中文名以主进程为准，界面不另存一份。
+    for (const [scope, label] of Object.entries(data.labels)) scopeLabel[scope] = label;
+  }
+  settingsSnapshot = collectSnapshotShape(prefixes);
+
+  input.value = '';
+  input.placeholder = '输入关键字过滤…（回车保存，Esc 取消）';
+  // 清掉上一轮搜索结果，避免关掉设置后残留旧列表。
+  searchToken += 1;
+  items = [];
+  activeIndex = -1;
+  resultsEl.textContent = '';
+  renderMode(null);
+  settingsOpen = true;
+  launcherEl.classList.add('settings-open');
+  settingsEl.hidden = false;
+  setCompact(false); // 设置页需要整块高度
+  renderSettingsRows(prefixes);
+  const first = settingsListEl.querySelector('.settings-input');
+  first?.focus();
+  first?.select?.();
+}
+
+function collectSnapshotShape(prefixes) {
+  const out = {};
+  for (const [scope, list] of Object.entries(prefixes)) out[scope] = [...list];
+  return out;
+}
+
+/** 设置页里的行过滤：按范围名或该行已有前缀匹配，空串显示全部。 */
+function filterSettingsRows(text) {
+  const needle = String(text ?? '').trim().toLowerCase();
+  for (const li of settingsListEl.children) {
+    const label = (scopeLabel[li.dataset.scope] ?? li.dataset.scope).toLowerCase();
+    const value = (li.querySelector('.settings-input')?.value ?? '').toLowerCase();
+    li.hidden = Boolean(needle) && !label.includes(needle) && !value.includes(needle);
+  }
+}
+
+function closeSettings() {
+  settingsOpen = false;
+  launcherEl.classList.remove('settings-open');
+  settingsEl.hidden = true;
+  input.placeholder = '搜索应用、文件、剪贴板…';
+  setSettingsMsg('');
+  resetToCompact();
+  input.focus();
+}
+
+async function saveSettings() {
+  const prefixes = collectSettings();
+  const changed = [];
+  for (const [scope, list] of Object.entries(prefixes)) {
+    if (!sameWords(list, settingsSnapshot?.[scope] ?? [])) changed.push(scopeLabel[scope] ?? scope);
+  }
+  if (changed.length === 0) {
+    setSettingsMsg('没有改动', '');
+    return;
+  }
+
+  const saveBtn = document.getElementById('settings-save');
+  saveBtn.disabled = true;
+  setSettingsMsg('保存中…', '');
+  let result = null;
+  try {
+    result = await window.launcher.savePrefixes(prefixes);
+  } catch (error) {
+    result = { ok: false, message: String(error?.message ?? error) };
+  } finally {
+    saveBtn.disabled = false;
+  }
+
+  if (!result?.ok) {
+    setSettingsMsg(result?.message ?? '保存失败', 'warn');
+    return;
+  }
+
+  // 保存成功：主进程已热更新前缀表。刷新本地配置并同步提示文案。
+  settingsSnapshot = collectSnapshotShape(result.prefixes ?? prefixes);
+  const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+  if (conflicts.length > 0) {
+    const detail = conflicts
+      .map((conflict) => `「${conflict.word}」保留在 ${scopeLabel[conflict.kept] ?? conflict.kept}`)
+      .join('；');
+    setSettingsMsg(`已保存；冲突已按顺序处理：${detail}`, 'warn');
+  } else {
+    setSettingsMsg(`已保存：${changed.join('、')}`, 'ok');
+  }
+  // 让徽标和空状态提示立刻用上新前缀。
+  try {
+    const next = await window.launcher.status();
+    if (next) {
+      status = next;
+      applyPrefixConfig(next);
+      renderStatus();
+      renderEmpty('');
+    }
+  } catch {
+    /* 状态刷新失败不影响已保存的事实 */
+  }
+  renderSettingsRows(result.prefixes ?? prefixes);
+}
+
 input.addEventListener('input', scheduleSearch);
 
 input.addEventListener('keydown', (event) => {
+  // 设置页独立处理按键：输入框在这里只是过滤辅助，回车=保存，Esc=取消。
+  if (settingsOpen) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSettings();
+    }
+    return;
+  }
+  // Ctrl/Cmd + 逗号打开设置，和多数 Windows 程序一致。
+  if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+    event.preventDefault();
+    openSettings();
+    return;
+  }
   switch (event.key) {
     case 'ArrowDown':
       event.preventDefault();
@@ -362,12 +649,15 @@ input.addEventListener('keydown', (event) => {
 
 // 再次唤起时清空并聚焦：启动器的直觉是"每次都是新的搜索"。
 window.launcher.onShown(() => {
+  // 唤起时若还停在设置页，先退出——用户按热键是想搜索，不是想继续编辑。
+  if (settingsOpen) closeSettings();
   input.value = '';
   resetToCompact();
   input.focus();
   window.launcher.status().then((next) => {
     if (!next) return;
     status = next;
+    applyPrefixConfig(next);
     renderStatus();
   });
 });
@@ -375,6 +665,7 @@ window.launcher.onShown(() => {
 window.launcher.onStatus((next) => {
   if (!next) return;
   status = next;
+  applyPrefixConfig(next);
   renderStatus();
   if (items.length === 0) renderEmpty(input.value);
 });
@@ -384,12 +675,37 @@ window.launcher
   .then((next) => {
     if (!next) return;
     status = next;
+    applyPrefixConfig(next);
     renderStatus();
+    renderEmpty('');
   })
   .catch(() => {});
 
 // 一加载就收成一行：窗口是按展开尺寸建的，等 launcher:shown 再收会闪一帧大空白。
 setCompact(true);
+
+/* ── 设置页按钮与快捷键 ───────────────────────────────────── */
+
+gearBtn.addEventListener('click', (event) => {
+  event.preventDefault();
+  if (settingsOpen) closeSettings();
+  else openSettings();
+});
+
+// 设置列表里的输入框：回车保存，Esc 取消。
+settingsListEl.addEventListener('keydown', (event) => {
+  if (!settingsOpen) return;
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    saveSettings();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeSettings();
+  }
+});
+
+document.getElementById('settings-save').addEventListener('click', () => saveSettings());
+document.getElementById('settings-cancel').addEventListener('click', () => closeSettings());
 
 /**
  * 窗口四周留了一圈透明边给投影；那片区域不该吃鼠标。

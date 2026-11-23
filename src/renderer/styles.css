@@ -14,7 +14,7 @@
   --radius: 15px;
   /* 与主进程 SHADOW_PAD 保持一致：窗口比卡片多出的一圈透明边距，
      否则投影会被窗口边界裁成方块暗角。 */
-  --shadow-pad: 24px;
+  --shadow-pad: 36px;
   --font: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
 }
 
@@ -47,14 +47,18 @@ body {
   flex-direction: column;
   height: 100%;
   background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
-  /* 一层蓝色辉光环 + 深投影 + 顶部内高光，模拟玻璃边缘受光。 */
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--fg);
   overflow: hidden;
+  /* 投影必须能在 --shadow-pad 内淡完，否则尾巴会被窗口边界硬切，留下一圈灰边。
+     36px 边距对应：blur 24（外扩 12）+ y 偏移 10 = 22，再留一倍余量给暗部淡出。
+     实测 24px 时最底一行还剩灰 239，看起来就是一圈矩形；36px 才落到纯白。
+     蓝色 ring 改到内侧做内描边——画在外面的彩色圈在白底上会显示成灰边。 */
   box-shadow:
-    0 0 0 1px var(--ring),
-    0 26px 64px rgba(0, 0, 0, 0.58),
+    0 10px 24px rgba(0, 0, 0, 0.5),
+    0 3px 8px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 1px rgba(92, 140, 255, 0.16),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
@@ -74,8 +78,22 @@ body {
 }
 
 .launcher.compact .status-bar,
-.launcher.compact .empty {
+.launcher.compact .empty,
+.launcher.compact .settings {
   display: none;
+}
+
+/* 设置视图：替换结果区，保留搜索行当标题栏用。 */
+.launcher.settings-open .results,
+.launcher.settings-open .empty,
+.launcher.settings-open .status-bar {
+  display: none;
+}
+
+.launcher.settings-open .settings {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .search-icon {
@@ -225,6 +243,55 @@ body {
 .row-avatar.av-4 { background: #8ce8a8; }
 .row-avatar.av-5 { background: #ffb3c7; }
 
+/* 真实程序图标位（应用 / 项目 / 文件）。26px 与头像位对齐，行高一致。
+   图标自带透明边，缩到 24px 看起来会比头像略小，所以撑满 26px 不用内边距。 */
+.row-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.row-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* 网页没有本地图标：收藏夹用金黄色五角星，已打开标签页用淡蓝标签页形状。 */
+.row-glyph {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+}
+.row-glyph svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.row-glyph.glyph-web-bookmark svg {
+  fill: rgba(255, 197, 66, 0.22);
+  stroke: #ffc542;
+}
+.row-glyph.glyph-web-tab svg {
+  stroke: #8fd8ff;
+}
+/* 剪贴板 / 文档：同样用线条图形，颜色沿用原来的类型色，保持辨识度。 */
+.row-glyph.glyph-kind-clipboard svg {
+  stroke: #ffcf7f;
+}
+.row-glyph.glyph-kind-doc svg {
+  stroke: #ffb3c7;
+}
+
 .row-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -293,4 +360,190 @@ body {
 
 .status-left.warn {
   color: #ffb84d;
+}
+
+/* ── 设置：前缀编辑 ───────────────────────────────────────── */
+
+.gear-btn {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+}
+
+.gear-btn:hover {
+  color: var(--fg);
+  background: var(--bg-row-hover);
+}
+
+.gear-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
+.settings {
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+}
+
+.settings-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 17px 10px;
+  border-bottom: 1px solid var(--divider);
+  flex: 0 0 auto;
+}
+
+.settings-title {
+  font-size: 14px;
+  color: var(--fg);
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.settings-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.settings-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+
+.settings-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 6px;
+}
+
+.settings-name {
+  flex: 0 0 84px;
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+
+.settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  padding: 6px 9px;
+  outline: 0;
+}
+
+.settings-input:focus {
+  border-color: rgba(120, 165, 255, 0.55);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-input.changed {
+  border-color: rgba(255, 197, 66, 0.5);
+}
+
+.settings-reset {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-faint);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.settings-reset:hover {
+  color: var(--fg);
+  background: var(--bg-row-hover);
+}
+
+.settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 15px;
+  border-top: 1px solid var(--divider);
+  flex: 0 0 auto;
+}
+
+.settings-msg {
+  font-size: 11px;
+  color: var(--fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-msg.warn {
+  color: #ffb84d;
+}
+
+.settings-msg.ok {
+  color: #8fd8a0;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.btn {
+  font-size: 12px;
+  font-family: var(--font);
+  padding: 6px 16px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.btn.ghost {
+  color: var(--fg-dim);
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.btn.ghost:hover {
+  color: var(--fg);
+  background: var(--bg-row-hover);
+}
+
+.btn.primary {
+  color: #0e1524;
+  background: #a8c4ff;
+  border-color: #a8c4ff;
+}
+
+.btn.primary:hover {
+  background: #c0d5ff;
 }

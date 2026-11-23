@@ -20,6 +20,17 @@ const { Worker } = require('node:worker_threads');
 
 const { createEngine } = require('../core/engine');
 const { createUsageStore, attachPersistence } = require('../core/usage');
+const {
+  DEFAULT_PREFIXES,
+  SCOPE_LABEL,
+  resolvePrefixes,
+  aliasesFor,
+  scopeForWord,
+  hintEntries,
+  diffPrefixes,
+  WEB_SCOPES,
+} = require('../core/prefixes');
+const { readConfigFile, writeConfigFile } = require('./configFile');
 const { createAppProvider } = require('../apps/appProvider');
 const { createFileProvider, scanRoots, defaultRoots } = require('../files/fileProvider');
 const { createClipboardProvider } = require('../clipboard/clipboardProvider');
@@ -47,13 +58,20 @@ const DINGTALK_MCP_ENDPOINTS = {
 let dingtalkOAuth = null;
 
 const { createJsonCache } = require('./persistence');
+const { iconDataUrl, prefetchIcons } = require('./icons');
 const { createWorkerScan } = require('./workerScan');
 const { resolveHotkey, hotkeyCandidates } = require('./hotkey');
+
+/**
+ * 哪些 kind 从左边的实体文件抽图标。
+ * 联系人/文档/剪贴板没有磁盘实体，走各自的内联样式或头像。
+ */
+const ICON_KINDS = new Set(['app', 'project', 'file']);
 
 const CONTENT_WIDTH = 680;
 const CONTENT_HEIGHT = 440;
 /** 窗口比内容多留的一圈透明边距，给卡片投影留出淡出的空间。 */
-const SHADOW_PAD = 24;
+const SHADOW_PAD = 36;
 const WINDOW_WIDTH = CONTENT_WIDTH + SHADOW_PAD * 2;
 const WINDOW_HEIGHT = CONTENT_HEIGHT + SHADOW_PAD * 2;
 /** 空状态只留搜索框时的高度下限（内容高度，不含边距）。渲染进程量出实际行高后会下发精确值。 */
@@ -86,6 +104,11 @@ let usagePersist = null;
 let registeredHotkey = null;
 let isQuitting = false;
 let mouseIgnored = false;
+let pageReady = null;
+/** 生效中的前缀表：渲染层画提示和徽标要用。 */
+let prefixTable = null;
+/** 上一次保存前缀算出的冲突，状态栏会带着显示。 */
+let prefixConflicts = [];
 let saveUsageTimer = null;
 /** 最近一轮搜索的完整条目，key 是 id。activate 用。 */
 let lastResults = new Map();
@@ -149,6 +172,11 @@ function createWindow() {
     },
   });
 
+  // 页面可能在 await engine.initAll() 期间就加载完，之后再挂 did-finish-load 会永远不触发，
+  // 窗口就一直不显示。所以一开始就把完成信号存成 promise。
+  pageReady = new Promise((resolve) => {
+    win.webContents.once('did-finish-load', () => resolve());
+  });
   win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   // 失焦即隐藏，这是启动器该有的手感。
@@ -288,11 +316,25 @@ function registerHotkey(config) {
 function buildProviders() {
   const config = loadConfig() ?? {};
 
+  // 前缀（锁定范围的首词）允许在 config.json 里改，也能在设置页里改。
+  const { prefixes, conflicts } = resolvePrefixes(config.prefixes);
+  for (const conflict of conflicts) {
+    startupErrors.push(`前缀「${conflict.word}」同时给了「${conflict.kept}」和「${conflict.dropped}」，已按前者生效`);
+  }
+  prefixTable = prefixes;
+  // 每次判定都读全局 prefixTable：设置页保存后热更新，不需要重建 provider。
+  const chromeScope = (alias) => {
+    const scope = scopeForWord(prefixTable, alias);
+    return WEB_SCOPES.includes(scope) ? scope : null;
+  };
+  prefixConflicts = conflicts;
+
   const usageStore = createUsageStore();
   usagePersist = attachPersistence(usageStore, userDataPath('usage.json'));
   usagePersist.loadFromDisk();
 
   fileProvider = createFileProvider({
+    aliases: () => aliasesFor(prefixTable, ['file']),
     roots: () => defaultRoots(),
     limit: 60,
     cache: createJsonCache(userDataPath('cache', 'file-index.json'), {
@@ -305,6 +347,7 @@ function buildProviders() {
   });
 
   clipboardProvider = createClipboardProvider({
+    aliases: () => aliasesFor(prefixTable, ['clipboard']),
     clipboard,
     limit: 15,
     interval: config.clipboardInterval,
@@ -314,18 +357,23 @@ function buildProviders() {
     writeClipboard: async (text) => clipboard.writeText(text),
   });
 
-  const appProvider = createAppProvider();
+  const appProvider = createAppProvider({ aliases: () => aliasesFor(prefixTable, ['app']) });
 
   projectProvider = createProjectProvider({
-    // config.json 可选覆盖：projectRoots（数组）、ideaPath（字符串）
+    aliases: () => aliasesFor(prefixTable, ['project']),
+    // config.json 可选覆盖：projectRoots（数组）、ideaPath / cursorPath / vscodePath（字符串）
     roots: () =>
       Array.isArray(config.projectRoots) && config.projectRoots.length > 0
         ? config.projectRoots
         : defaultProjectRoots(),
     ideaPath: typeof config.ideaPath === 'string' ? config.ideaPath : undefined,
+    cursorPath: typeof config.cursorPath === 'string' ? config.cursorPath : undefined,
+    vscodePath: typeof config.vscodePath === 'string' ? config.vscodePath : undefined,
   });
 
   chromeProvider = createChromeProvider({
+    aliases: () => aliasesFor(prefixTable, WEB_SCOPES),
+    scopeOf: chromeScope,
     // config.json 可选：chromePath（字符串）、tabRefreshInterval（毫秒，0 关闭轮询）
     chromePath: typeof config.chromePath === 'string' ? config.chromePath : undefined,
     refreshInterval:
@@ -423,6 +471,7 @@ function buildProviders() {
   };
 
   contactProvider = createContactProvider({
+    aliases: () => aliasesFor(prefixTable, ['contact']),
     mcpUrl: dingtalkUrls.contacts,
     oauth: dingtalkOAuth.contacts,
     // 冒烟测试里不弹 OAuth，只验证界面能画出缓存结果或空状态。
@@ -436,6 +485,7 @@ function buildProviders() {
   });
 
   documentProvider = createDocumentProvider({
+    aliases: () => aliasesFor(prefixTable, ['doc']),
     mcpUrl: dingtalkUrls.docs,
     oauth: dingtalkOAuth.docs,
     allowRemote: process.env.DSH_SMOKE !== '1',
@@ -491,12 +541,35 @@ function sendStatus() {
   win.webContents.send('launcher:status', collectStatus());
 }
 
+/**
+ * 启动后空闲时把常用条目的图标先抽好：应用和项目各抽一批，
+ * 用户第一次搜索时列表不用等磁盘读图标。
+ */
+function prefetchListIcons() {
+  setImmediate(() => {
+    try {
+      const apps = engine?.get('app')?.search?.() ?? [];
+      const projects = projectProvider?.search?.() ?? [];
+      prefetchIcons(apps.slice(0, 400).map((item) => item.path));
+      prefetchIcons(projects.map((item) => item.iconFile));
+    } catch {
+      /* 预热失败无所谓，搜索时会现抽 */
+    }
+  });
+}
+
 function collectStatus() {
   const stats = fileProvider?.stats?.() ?? {};
   return {
     hotkey: registeredHotkey,
     // 临时提示排在错误前面显示，登录结束后自动清空。
-    errors: [dingtalkNotice, ...startupErrors].filter(Boolean),
+    errors: [
+      dingtalkNotice,
+      ...startupErrors,
+      ...prefixConflicts.map(
+        (conflict) => `前缀「${conflict.word}」冲突：保留了「${conflict.kept}」`,
+      ),
+    ].filter(Boolean),
     indexing: Boolean(fileProvider?.isIndexing?.()),
     fileCount: stats.count ?? 0,
     clipboardCount: clipboardProvider?.stats?.().history ?? 0,
@@ -510,7 +583,21 @@ function collectStatus() {
     docsConfigured: Boolean(documentProvider?.stats?.().configured),
     trayAvailable: Boolean(tray),
     userData: app.getPath('userData'),
+    // 渲染层用：空状态提示的「a 应用 / f 文件 …」和锁定徽标都跟着实际配置走，
+    // 用户在前缀里加了新词就能立刻看到，不需要界面各存一份。
+    hint: prefixTable ? hintEntries(prefixTable) : [],
+    aliasScope: prefixAliasScope(),
   };
+}
+
+/** alias（小写原词）→ scope，例如 a→app、b→bookmark。徽标按它取中文名。 */
+function prefixAliasScope() {
+  const map = {};
+  if (!prefixTable) return map;
+  for (const [scope, words] of Object.entries(prefixTable)) {
+    for (const word of words) map[String(word).toLowerCase()] = scope;
+  }
+  return map;
 }
 
 function registerIpc() {
@@ -547,11 +634,15 @@ function registerIpc() {
     lastResults = new Map();
     for (const item of result.items) lastResults.set(item.id, item);
 
-    return {
-      items: result.items.map((item) => {
+    // 图标：应用/项目/文件抽真实文件图标（进程内缓存，重复路径不重复抽）。
+    // 首轮是磁盘 IO，但 9 条、每条几毫秒，值得等——否则列表会先糊一片占位再跳图。
+    const items = await Promise.all(
+      result.items.map(async (item) => {
         // 头像：本地缓存命中就同步带上 data URL（几 KB），没命中先留空，
         // 由 launcher:avatar 异步补，不拖慢按键。
         const avatar = avatarStore?.dataUrl(item.avatarId) ?? null;
+        const iconFile = ICON_KINDS.has(item.kind) ? item.iconFile ?? item.path : null;
+        const icon = iconFile ? await iconDataUrl(iconFile) : null;
         return {
           id: item.id,
           provider: item.provider,
@@ -560,12 +651,19 @@ function registerIpc() {
           subtitle: item.subtitle,
           initials: item.initials,
           avatar,
+          icon,
+          // 网页条目要区分「已打开标签页」和「收藏夹」，列表前置图标不同。
+          source: item.source ?? null,
           // 有 avatarId 但图还没到，界面才会去要；远端联系人没有这个字段。
           avatarPending: Boolean(item.avatarId) && !avatar,
           score: item.score,
           pinned: item.pinned,
         };
       }),
+    );
+
+    return {
+      items,
       errors: result.errors,
       query: {
         providerHint: result.query.providerHint,
@@ -627,6 +725,64 @@ function registerIpc() {
       return { ok: false, message: String(error?.message ?? error) };
     }
   });
+
+  // 设置页：读取当前生效的前缀 + 每个范围的默认值，供界面「恢复默认」用。
+  ipcMain.handle('launcher:getPrefixes', async () => ({
+    ok: true,
+    prefixes: prefixTable ?? resolvePrefixes().prefixes,
+    defaults: DEFAULT_PREFIXES,
+    labels: SCOPE_LABEL,
+  }));
+
+  /**
+   * 保存前缀。
+   * 界面传来的是整套前缀；这里先校验、算冲突，再只把「与默认不同」的部分
+   * 写回 config.json（不覆盖用户手写的其他字段），最后热更新内存里的表。
+   */
+  ipcMain.handle('launcher:savePrefixes', async (_event, payload) => {
+    const overrides = payload?.prefixes;
+    if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+      return { ok: false, message: '前缀格式不正确' };
+    }
+
+    // 先做静态校验：每一项都该是非空字符串数组，坏数据不落盘。
+    for (const scope of Object.keys(DEFAULT_PREFIXES)) {
+      const list = overrides[scope];
+      if (list == null) continue;
+      if (!Array.isArray(list)) return { ok: false, message: `「${SCOPE_LABEL[scope]}」必须是字符串数组` };
+      if (!list.every((entry) => typeof entry === 'string' && entry.trim())) {
+        return { ok: false, message: `「${SCOPE_LABEL[scope]}」里有空项或非字符串` };
+      }
+    }
+
+    const { prefixes, conflicts } = resolvePrefixes(overrides);
+
+    const filePath = userDataPath('config.json');
+    const existing = readConfigFile(filePath);
+    if (!existing.ok) {
+      // 配置文件坏了就拒绝写，避免把用户手写的内容抹成只剩 prefixes。
+      return { ok: false, message: `现有 config.json 无法解析，未保存：${existing.message}` };
+    }
+    const nextConfig = { ...existing.data };
+    const diff = diffPrefixes(prefixes);
+    if (Object.keys(diff).length > 0) nextConfig.prefixes = diff;
+    else delete nextConfig.prefixes;
+
+    const written = writeConfigFile(filePath, nextConfig);
+    if (!written.ok) return { ok: false, message: `写入 config.json 失败：${written.message}` };
+
+    // 热更新：别名是 getter、Chrome 范围判定也读全局表，下一轮搜索就生效。
+    prefixTable = prefixes;
+    prefixConflicts = conflicts;
+    sendStatus();
+    return {
+      ok: true,
+      prefixes,
+      conflicts,
+      // 提示界面：真正落盘的只有这几项（其余沿用默认）。
+      saved: diff,
+    };
+  });
 }
 
 function quitApp() {
@@ -651,11 +807,13 @@ app.whenReady().then(async () => {
   // provider 初始化不阻塞窗口显示：先把空壳亮出来，索引在后台长。
   const initErrors = await engine.initAll();
   for (const error of initErrors) startupErrors.push(`${error.provider} 初始化失败：${error.message}`);
+  prefetchListIcons();
 
-  win.webContents.once('did-finish-load', () => {
-    sendStatus();
-    showWindow();
-  });
+  await pageReady;
+  sendStatus();
+  // 冒烟自己会 show() 并驱动界面；这里再走一遍 showWindow 会多发一次
+  // launcher:shown，把冒烟刚输入的查询清掉（两者是竞态）。
+  if (process.env.DSH_SMOKE !== '1') showWindow();
 
   // 索引构建期间定期推状态，让底部能显示"索引中… 3.8 万"而不是干等。
   const statusTimer = setInterval(() => {
@@ -678,11 +836,10 @@ app.whenReady().then(async () => {
 
   if (process.env.DSH_SMOKE === '1') {
     const { run } = require('./smoke');
-    win.webContents.once('did-finish-load', () => {
-      run({ app, win, query: process.env.DSH_SMOKE_QUERY || 'code' })
-        .catch((error) => console.error('[smoke] 失败:', error))
-        .finally(() => quitApp());
-    });
+    pageReady
+      .then(() => run({ app, win, query: process.env.DSH_SMOKE_QUERY || 'code' }))
+      .catch((error) => console.error('[smoke] 失败:', error))
+      .finally(() => quitApp());
   }
 });
 

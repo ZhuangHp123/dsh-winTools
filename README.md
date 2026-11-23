@@ -35,8 +35,9 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 | `文件 xxx` | 锁定只搜文件 |
 | `~ xxx` | 快捷锁定剪贴板 |
 | `↑` `↓` / `Tab` | 上下移动 |
-| `Enter` | 执行：打开应用、用 IDEA 打开项目、切换/新开网页、打开钉钉聊天、打开文档、打开文件、把剪贴板内容写回剪贴板 |
+| `Enter` | 执行：打开应用、用对应 IDE 打开项目、切换/新开网页、打开钉钉聊天、打开文档、打开文件、把剪贴板内容写回剪贴板 |
 | `Esc` | 清空输入；已为空时隐藏窗口 |
+| `Ctrl+,` | 打开/关闭"自定义搜索前缀"设置页 |
 | 托盘图标 | 显示搜索 / 重新索引文件 / 登录钉钉 / 退出 |
 
 ### 快捷前缀（英文首字母）
@@ -46,7 +47,7 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 | 前缀 | 锁定 | 示例 |
 | --- | --- | --- |
 | `a` | 应用 / 程序 | `a 微信` |
-| `p` | IDEA 项目 | `p cfmoto` |
+| `p` | IDE 项目 | `p cfmoto` |
 | `b` | 仅收藏夹书签 | `b 任务调度` |
 | `w` | 仅已打开的标签页 | `w 周报` |
 | `f` | 文件 | `f 报价单` |
@@ -60,21 +61,66 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 热键可通过 `%APPDATA%\dsh-wintools\config.json` 的 `hotkey` 字段或环境变量
 `DSH_HOTKEY` 指定，例如 `{ "hotkey": "Ctrl+Alt+K" }`。
 
-### 项目（IDEA）
+### 自定义前缀
 
-项目来源：IDEA 的最近项目列表（`%APPDATA%\JetBrains\IntelliJIdea*\options\recentProjects.xml`）
-加上配置根目录下带 `.idea` 的目录，合并去重。默认扫描
-`%USERPROFILE%\IdeaProjects`、`D:\cfDev`、`D:\code`、`D:\dev`、`D:\projects`、`D:\workspace`。
+前缀可以在启动器里直接改：按 `Ctrl+,`（或点搜索框右侧的齿轮），打开"自定义搜索前缀"页，
+每个范围一行，改完回车或点"保存"立即生效，不用重启。每行右边的"默认"按钮只重置那一行；
+输入框用空格或 `/` 分隔多个前缀。
+
+也可以手改 `%APPDATA%\dsh-wintools\config.json` 的 `prefixes` 字段（改完重启生效）。
+两种方式写的是同一个文件，设置页保存时只写回"与默认不同"的那几项，不会覆盖你手写的其他字段：
+
+```json
+{
+  "prefixes": {
+    "app": ["应用", "程序", "ap"],
+    "file": ["文件", "f"],
+    "bookmark": ["收藏夹", "b"]
+  }
+}
+```
+
+可用的范围（键名）：`app` 应用 / `project` 项目 / `web` 网页 / `bookmark` 收藏夹 /
+`tab` 标签页 / `contact` 联系人 / `doc` 钉钉文档 / `file` 文件 / `clipboard` 剪贴板。
+
+规则：
+
+- 写了的范围**整项替换**，没写的沿用默认——只改一两类不用把九项都抄一遍。
+- 设置页里把某一行的输入框清空保存，等于把它恢复默认（把某类前缀清空会让它锁不上，
+  一般不是本意）。
+- 同一个词被两个范围用了，按上面的定义顺序先到先得，后一个丢弃，设置页和状态栏都会提示冲突。
+- 大小写不敏感，重复项自动去掉。中文、英文、符号都可以。
+- 空状态提示（"输入关键字开始搜索；a 应用 / …"）和右上角范围徽标都按实际配置生成，
+  改完立刻能对上。
+
+### 项目（IDEA / Cursor / VS Code）
+
+项目来源三路合并去重：
+
+1. IDEA 的最近项目列表（`%APPDATA%\JetBrains\IntelliJIdea*\options\recentProjects.xml`）
+2. Cursor / VS Code 的 `User\workspaceStorage`（每个打开过的项目一个目录，带最近打开时间）
+   加上 `User\globalStorage\state.vscdb` 里的 `history.recentlyOpenedPathsList`（补漏）
+3. 配置根目录下带 `.idea` / `.cursor` / `.vscode` 的目录（深度受限）
+
+默认扫描 `%USERPROFILE%\IdeaProjects`、`D:\cfDev`、`D:\code`、`D:\dev`、`D:\projects`、`D:\workspace`。
+
+**回车用哪个 IDE**：项目在多个 IDE 里都开过时，比较各自记录的最近打开时间，
+谁最后开过用谁。列表左侧的图标就是那个 IDE 自己的图标（IDEA / Cursor / VS Code），
+一眼能看出回车会开在哪。
 
 ```json
 {
   "projectRoots": ["D:\\cfDev", "D:\\IdeaProjects"],
-  "ideaPath": "D:\\IntelliJ IDEA 2026.2.3\\bin\\idea64.exe"
+  "ideaPath": "D:\\IntelliJ IDEA 2026.2.3\\bin\\idea64.exe",
+  "cursorPath": "D:\\cursor\\Cursor.exe",
+  "vscodePath": "D:\\Microsoft VS Code\\Code.exe"
 }
 ```
 
-两个字段都可省略：`projectRoots` 省略用默认目录，`ideaPath` 省略时自动在
-`Program Files\JetBrains`、`%LOCALAPPDATA%\Programs`、Toolbox 和盘符根目录下找。
+字段都可省略：`projectRoots` 省略用默认目录；`ideaPath` 省略时自动在
+`Program Files\JetBrains`、`%LOCALAPPDATA%\Programs`、Toolbox 和盘符根目录下找；
+`cursorPath` / `vscodePath` 省略时在 `%LOCALAPPDATA%\Programs`、`Program Files`
+和盘符根目录下找（也认 `DSH_IDEA` / `DSH_CURSOR` / `DSH_VSCODE` 环境变量）。
 
 ### 网页（Chrome）
 
@@ -172,18 +218,21 @@ src/
 ├── core/          纯逻辑，无 Electron 依赖，全部可单测
 │   ├── engine.js     provider 调度 + 超时 + 查询串行化
 │   ├── query.js      输入解析（provider 锁定语法）
+│   ├── prefixes.js   可配置的搜索前缀（config.json 的 prefixes）
 │   ├── fuzzy.js      模糊匹配打分
 │   ├── rank.js       排序（匹配分 + frecency + provider 权重）
 │   └── usage.js      使用频次存储
 ├── apps/          开始菜单 .lnk 扫描与启动
-├── projects/      IDE 项目发现与用 IDEA 打开
+├── projects/      IDE 项目发现（IDEA / Cursor / VS Code）与按 IDE 打开
 ├── web/           Chrome 标签页（UIA）与收藏夹搜索
 ├── dingtalk/      钉钉联系人/文档（本地库索引 + 头像 + MCP 网关兜底 + OAuth）
 ├── files/         文件索引（缓存式，worker 后台扫盘）
 ├── clipboard/     剪贴板历史（轮询，去重，置顶）
 ├── main/          Electron 主进程
 │   ├── main.js       窗口 / 热键 / 托盘 / IPC / 数据落盘
-│   ├── preload.js    contextBridge 暴露的 4 个方法
+│   ├── preload.js    contextBridge 暴露给渲染层的方法
+│   ├── icons.js      列表前置图标（app.getFileIcon 抽真实程序图标，进程内缓存）
+│   ├── configFile.js config.json 的读 / 原子写（保住用户手写的其他字段）
 │   ├── hotkey.js     热键候选链
 │   ├── persistence.js JSON 缓存原子写
 │   ├── workerScan.js 扫描 worker 封装（含降级）
@@ -200,8 +249,12 @@ test/             node:test 单元测试
   engine 对每个 provider 独立超时（1.5s），慢的不拖累快的；后用发起的查询作废前一轮结果。
 - **文件索引**：启动先用缓存，同时在 worker 线程扫盘（桌面/文档/下载优先，再整盘，
   默认排除 `node_modules`/`.git`/`AppData` 等）。本机约 3.8 万文件、几秒完成。
-- **项目**：启动时同步扫描（本机 5ms），来源为 IDEA 最近项目列表 + 带 `.idea`
-  的目录；回车 `idea64.exe <路径>`，detached 启动，IDE 生命周期不挂在启动器上。
+- **项目**：启动时同步扫描（本机几十毫秒），来源为 IDEA 最近项目列表、Cursor/VS Code
+  的 `workspaceStorage` + 最近列表、带 `.idea`/`.cursor`/`.vscode` 的目录；回车用
+  "最近一次真正打开过它的那个 IDE"，detached 启动，IDE 生命周期不挂在启动器上。
+- **列表图标**：应用/项目/文件从 Windows 图标资源抽真实程序图标（`app.getFileIcon`，
+  48px，进程内缓存；`.lnk` 先解析出目标 exe 再抽，因为快捷方式本身抽出来是空白文档图标）；
+  收藏夹是金黄色五角星、已打开标签页是窗口形状；联系人仍是头像。图标抽失败时退回文字标。
 - **剪贴板**：Electron 没有剪贴板变更事件，只能轮询（600ms）。Electron 45 的
   `clipboard.readText()` 返回 Promise，轮询器对同步/异步两种返回都支持。
 - **网页**：走三条本地通道，不依赖调试端口。标签页/位置用 UI Automation 枚举，

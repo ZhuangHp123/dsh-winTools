@@ -271,7 +271,7 @@ function createContactProvider(options = {}) {
 
   return {
     id: 'dingtalk',
-    aliases: ['钉钉', '联系人', '通讯录', 'dingtalk', 'contact', 'contacts', 'c', 'dc'],
+    aliases: options.aliases ?? ['钉钉', '联系人', '通讯录', 'dingtalk', 'contact', 'contacts', 'c', 'dc'],
     label: '联系人',
     timeout: REMOTE_TIMEOUT,
 
@@ -391,7 +391,7 @@ function createDocumentProvider(options = {}) {
 
   return {
     id: 'dingdoc',
-    aliases: ['文档', '钉钉文档', 'dingdoc', 'doc', 'docs', 'dd'],
+    aliases: options.aliases ?? ['文档', '钉钉文档', 'dingdoc', 'doc', 'docs', 'dd'],
     label: '文档',
     timeout: REMOTE_TIMEOUT,
 

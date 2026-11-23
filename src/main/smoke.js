@@ -16,6 +16,9 @@ async function run({ app, win, query }) {
   fs.mkdirSync(outDir, { recursive: true });
 
   const shot = async (name) => {
+    // 窗口被 Esc 隐藏后 capturePage 会抛 UnknownVizError，截不到画面。
+    if (!win.isVisible()) win.show();
+    await new Promise((resolve) => setTimeout(resolve, 200));
     const image = await win.webContents.capturePage();
     fs.writeFileSync(path.join(outDir, name), image.toPNG());
     console.log(`[smoke] 截图 ${name}`);
@@ -44,6 +47,10 @@ async function run({ app, win, query }) {
             avatar: row.querySelector('.row-avatar')?.textContent,
             // 真人头像是 <img src="data:...">，首字色块是纯文本
             avatarImage: Boolean(row.querySelector('.row-avatar img')?.src),
+            // 应用/项目/文件的真实图标
+            icon: Boolean(row.querySelector('.row-icon img')?.src),
+            // 网页的收藏夹/标签页形状
+            glyph: row.querySelector('.row-glyph')?.className ?? null,
             title: row.querySelector('.row-title')?.textContent,
             sub: row.querySelector('.row-sub')?.textContent,
             active: row.classList.contains('active'),
@@ -169,6 +176,39 @@ async function run({ app, win, query }) {
   // 状态：热键与索引状态要能从渲染进程读到。
   const statusResult = await win.webContents.executeJavaScript('window.launcher.status()');
   console.log('[smoke] 状态', JSON.stringify(statusResult));
+
+  // 设置页：能打开、能列出全部范围、默认值提示非空。
+  await win.webContents.executeJavaScript(`
+    (() => { document.getElementById('open-settings').click(); return true; })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const settingsState = await win.webContents.executeJavaScript(`
+    (() => {
+      const panel = document.getElementById('settings');
+      const rows = [...document.querySelectorAll('.settings-item')];
+      return {
+        open: !panel.hidden,
+        classOn: document.getElementById('launcher').classList.contains('settings-open'),
+        rows: rows.map((row) => ({
+          scope: row.dataset.scope,
+          value: row.querySelector('.settings-input')?.value ?? '',
+          placeholder: row.querySelector('.settings-input')?.placeholder ?? '',
+        })),
+      };
+    })()
+  `);
+  await shot('smoke-settings.png');
+  console.log('[smoke] 设置页', JSON.stringify(settingsState));
+
+  // 改一个前缀并保存：只动冒烟专用的 config.json，不碰真实配置。
+  const saveResult = await win.webContents.executeJavaScript(
+    `window.launcher.savePrefixes({ app: ['app', '软件'], bookmark: ['收藏', 'bm'] })`,
+  );
+  console.log('[smoke] 保存前缀', JSON.stringify({ ok: saveResult?.ok, saved: saveResult?.saved }));
+  const afterSave = await win.webContents.executeJavaScript(
+    `document.getElementById('empty').textContent`,
+  );
+  console.log('[smoke] 保存后提示', JSON.stringify(afterSave));
 
   app.quit();
 }

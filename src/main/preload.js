@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('launcher', {
   setIgnoreMouse: (ignore) => ipcRenderer.send('launcher:setIgnoreMouse', Boolean(ignore)),  hide: () => ipcRenderer.invoke('launcher:hide'),
   reindex: () => ipcRenderer.invoke('launcher:reindex'),
   openExternal: (url) => ipcRenderer.invoke('launcher:openExternal', url),
+  getPrefixes: () => ipcRenderer.invoke('launcher:getPrefixes'),
+  savePrefixes: (prefixes) => ipcRenderer.invoke('launcher:savePrefixes', { prefixes }),
   onShown: (callback) => {
     const handler = () => callback();
     ipcRenderer.on('launcher:shown', handler);

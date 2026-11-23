@@ -118,7 +118,9 @@ function findProvider(word, providers) {
   for (const provider of providers) {
     if (!provider || typeof provider.id !== 'string') continue;
     if (provider.id.toLowerCase() === word) return provider.id;
-    const aliases = Array.isArray(provider.aliases) ? provider.aliases : [];
+    // 前缀可在设置页里改，aliases 允许是函数（每次现取最新值）。
+    const raw = typeof provider.aliases === 'function' ? provider.aliases() : provider.aliases;
+    const aliases = Array.isArray(raw) ? raw : [];
     for (const alias of aliases) {
       if (String(alias).toLowerCase() === word) return provider.id;
     }

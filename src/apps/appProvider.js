@@ -172,7 +172,7 @@ function createAppProvider(options = {}) {
 
   return {
     id: 'app',
-    aliases: ['应用', 'apps', 'program', '程序', 'a'],
+    aliases: options.aliases ?? ['应用', 'apps', 'program', '程序', 'a'],
     label: '应用',
 
     async init() {

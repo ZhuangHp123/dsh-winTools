@@ -1,23 +1,35 @@
 'use strict';
 
 /**
- * 项目 provider：把本机的 IDE 项目变成可搜索条目，回车用 IntelliJ IDEA 打开。
+ * 项目 provider：把本机的 IDE 项目变成可搜索条目，回车用对应的 IDE 打开。
  *
- * 项目来源两条，合并去重：
+ * 项目来源三条，合并去重：
  *   1. IDEA 自己的最近项目列表
  *      %APPDATA%\JetBrains\IntelliJIdea*\options\recentProjects.xml
  *      —— 覆盖"用户开过的所有项目"，包括不在配置根目录里的。
- *   2. 配置根目录下带 .idea 的目录（深度受限，绝不遍历整盘）。
+ *   2. Cursor / VS Code 的最近打开列表（User\globalStorage\state.vscdb 里的
+ *      history.recentlyOpenedPathsList），只取文件夹条目。
+ *   3. 配置根目录下带 IDE 标记目录（.idea / .cursor / .vscode）的项目，
+ *      深度受限，绝不遍历整盘。
  *
- * 打开方式：idea64.exe <项目路径>。IDEA 已在运行时，这次调用会交给已有
- * 实例处理，不会起第二个 IDE 窗口。
+ * 打开方式：项目的编辑历史说明用哪个 IDE 就用哪个——.idea 的 workspace.xml
+ * 比 .cursor 新就用 IDEA，反之用 Cursor。图标也取该 IDE 自己的 exe 图标，
+ * 这样列表里一眼看出"这个项目回车会开在哪个软件里"。
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { fileURLToPath } = require('node:url');
 const { spawn } = require('node:child_process');
 
-/** 项目标记目录：存在即认为是 IDE 项目。 */
+/** IDE 标记目录：存在即认为是 IDE 项目；也是判断"最近用哪个 IDE 开的"的依据。 */
+const IDE_MARKERS = [
+  { ide: 'cursor', marker: '.cursor', workspaceFile: null },
+  { ide: 'vscode', marker: '.vscode', workspaceFile: null },
+  { ide: 'idea', marker: '.idea', workspaceFile: path.join('.idea', 'workspace.xml') },
+];
+
+/** 兼容旧导出：.idea 曾是这个模块唯一的项目标记。 */
 const PROJECT_MARKER = '.idea';
 
 /** 扫描深度：项目一般就在根目录下 1~3 层。 */
@@ -149,18 +161,222 @@ function readRecentProjects(options = {}) {
     if (seen.has(key)) continue;
     if (!exists(project.path)) continue;
     seen.add(key);
-    out.push(project);
+    out.push({ ...project, openedBy: { idea: project.openedAt }, ides: ['idea'] });
+  }
+  return out;
+}
+
+/** VS Code 系（Cursor / Code）的最近列表文件位置。 */
+const VSCODE_FAMILY = [
+  { ide: 'cursor', appName: 'Cursor' },
+  { ide: 'vscode', appName: 'Code' },
+];
+
+/**
+ * 读 VS Code 系编辑器的最近打开列表（文件夹条目）。
+ *
+ * 数据在 User\globalStorage\state.vscdb 的 ItemTable 里，值是 JSON；
+ * 只取 folderUri，单文件条目（用户随手双击打开的）不算项目。
+ * 库被编辑器占着，和 Chrome 历史库一样用 immutable 只读打开。
+ *
+ * 同时扫 User\workspaceStorage\<hash>\workspace.json：每个项目一个目录，
+ * workspace.json 的修改时间就是"这个项目最近一次在该编辑器里打开"的时间——
+ * 这是唯一能和 IDEA 的 projectOpenTimestamp 直接比较的信号
+ * （项目里的 .cursor 目录只反映配置改动，不代表打开过）。
+ *
+ * @param {object} [options]
+ * @returns {Array<{path:string, customName:null, openedAt:number, openedBy:object, ides:string[]}>}
+ */
+function readVscodeRecentProjects(options = {}) {
+  const appData = options.appData ?? (options.env ?? process.env).APPDATA;
+  if (!appData) return [];
+  const openDatabase = options.openDatabase ?? defaultOpenDatabase;
+  const exists = options.exists ?? defaultExists;
+  const statSync = options.statSync ?? defaultStatSync;
+  const listDirs = options.listDirs ?? defaultListDirs;
+  const out = [];
+
+  for (const { ide, appName } of VSCODE_FAMILY) {
+    const userDir = path.join(appData, appName, 'User');
+    const openedByPath = readWorkspaceStorageTimes(path.join(userDir, 'workspaceStorage'), {
+      exists,
+      statSync,
+      listDirs,
+      readFile: options.readFile,
+    });
+
+    // workspaceStorage 才是主来源：每个打开过的项目一个目录，哪怕它已经从
+    // 最近列表里滚出去了，这里仍然留着，并带最近打开时间。
+    for (const opened of openedByPath.values()) {
+      if (!exists(opened.path)) continue;
+      out.push({
+        path: opened.path,
+        customName: null,
+        openedAt: opened.openedAt,
+        openedBy: { [ide]: opened.openedAt },
+        ides: [ide],
+      });
+    }
+
+    // 最近列表补漏：有项目可能还没写 workspaceStorage，时间记为 0（只用于收录）。
+    const file = path.join(userDir, 'globalStorage', 'state.vscdb');
+    if (!exists(file)) continue;
+    let entries;
+    try {
+      entries = readRecentlyOpenedPaths(file, openDatabase);
+    } catch {
+      continue; // 带着锁/损坏：跳过这个编辑器，不影响其它来源
+    }
+    for (const entry of entries) {
+      const target = entry.folderUri ?? entry.workspace?.configPath ?? null;
+      if (!target || !target.startsWith('file:')) continue;
+      let dir;
+      try {
+        dir = fileURLToPath(target);
+      } catch {
+        continue;
+      }
+      // workspace.json 指向 .code-workspace 文件，项目根是它的目录。
+      if (entry.workspace?.configPath) dir = path.dirname(dir);
+      if (!exists(dir)) continue;
+      if (openedByPath.has(dir.toLowerCase())) continue;
+      out.push({
+        path: dir,
+        customName: null,
+        openedAt: 0,
+        openedBy: { [ide]: 0 },
+        ides: [ide],
+      });
+    }
   }
   return out;
 }
 
 /**
- * 扫描根目录下带 .idea 的项目目录。
+ * 扫 workspaceStorage，得到"项目路径 → 最近打开时间"。
+ * 目录结构：<userData>\User\workspaceStorage\<hash>\workspace.json，
+ * 内容 {"folder":"file:///d%3A/cfDev/cfmoto"}。
+ * @returns {Map<string, {path:string, openedAt:number}>} key 是小写路径
+ */
+function readWorkspaceStorageTimes(root, deps) {
+  const { exists, statSync, listDirs, readFile = (p) => fs.readFileSync(p, 'utf8') } = deps;
+  const map = new Map();
+  for (const name of listDirs(root)) {
+    const file = path.join(root, name, 'workspace.json');
+    if (!exists(file)) continue;
+    let parsed;
+    let mtime;
+    try {
+      parsed = JSON.parse(readFile(file));
+      mtime = statSync(file).mtimeMs ?? 0;
+    } catch {
+      continue;
+    }
+    const target = parsed?.folder ?? parsed?.workspace;
+    if (typeof target !== 'string' || !target.startsWith('file:')) continue;
+    let dir;
+    try {
+      dir = fileURLToPath(target);
+    } catch {
+      continue;
+    }
+    const key = dir.toLowerCase();
+    const previous = map.get(key);
+    if (!previous || previous.openedAt < mtime) map.set(key, { path: dir, openedAt: mtime });
+  }
+  return map;
+}
+
+/** 默认的只读打开方式（node:sqlite，Electron 和 Node 24 都自带）。 */
+function defaultOpenDatabase(file) {
+  const { DatabaseSync } = require('node:sqlite');
+  return new DatabaseSync(`file:${file.split(path.sep).join('/')}?mode=ro&immutable=1`);
+}
+
+/** 从 state.vscdb 读 history.recentlyOpenedPathsList，返回 entries 数组。 */
+function readRecentlyOpenedPaths(file, openDatabase = defaultOpenDatabase) {
+  let db;
+  try {
+    db = openDatabase(file);
+    const row = db
+      .prepare("SELECT value FROM ItemTable WHERE key = 'history.recentlyOpenedPathsList'")
+      .get();
+    if (!row?.value) return [];
+    const data = JSON.parse(typeof row.value === 'string' ? row.value : String(row.value));
+    return Array.isArray(data?.entries) ? data.entries : [];
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * 项目的 IDE 标记目录里最近一次更新的时间。
+ * VS Code 系没有可用的打开时间（.cursor 只反映配置改动），退回到目录 mtime；
+ * IDEA 优先用 workspace.xml——它只在真正打开项目时写。
+ */
+function markerMtime(projectDir, ide, statSync) {
+  const entry = IDE_MARKERS.find((item) => item.ide === ide);
+  if (!entry) return 0;
+  const candidates = entry.workspaceFile
+    ? [path.join(projectDir, entry.workspaceFile), path.join(projectDir, entry.marker)]
+    : [path.join(projectDir, entry.marker)];
+  for (const target of candidates) {
+    try {
+      return statSync(target).mtimeMs ?? 0;
+    } catch {
+      /* 下一个 */
+    }
+  }
+  return 0;
+}
+
+/**
+ * 决定项目用哪个 IDE 打开。
+ *
+ * 优先比较"各编辑器最近一次打开这个项目"的时间（IDEA 取 projectOpenTimestamp，
+ * Cursor/VS Code 取 workspaceStorage 里 workspace.json 的 mtime）——谁最后开过用谁。
+ * 没有任何打开时间时退回标记目录 mtime，再不行按 ides 顺序。
+ *
+ * @param {{path:string, ides?:string[], openedBy?:object}} project
+ * @param {{statSync?:Function}} [options]
+ * @returns {string} 'idea' | 'cursor' | 'vscode'
+ */
+function resolveProjectIde(project, options = {}) {
+  const statSync = options.statSync ?? defaultStatSync;
+  const ides = Array.isArray(project.ides) && project.ides.length > 0 ? project.ides : ['idea'];
+  if (ides.length === 1) return ides[0];
+
+  const openedBy = project.openedBy ?? {};
+  const hasOpenedTime = ides.some((ide) => (openedBy[ide] ?? 0) > 0);
+  const timeOf = (ide) => (hasOpenedTime ? openedBy[ide] ?? 0 : markerMtime(project.path, ide, statSync));
+
+  let best = ides[0];
+  let bestTime = -1;
+  for (const ide of ides) {
+    const time = timeOf(ide);
+    if (time > bestTime) {
+      bestTime = time;
+      best = ide;
+    }
+  }
+  return best;
+}
+
+function defaultStatSync(target) {
+  return fs.statSync(target);
+}
+
+/**
+ * 扫描根目录下带 IDE 标记目录（.idea / .cursor / .vscode）的项目目录。
  *
  * 找到项目就不再往里走——项目内部即便有子模块，打开项目根就够了。
  *
  * @param {object} [options]
- * @returns {Array<{path:string, customName:null, openedAt:number}>}
+ * @returns {Array<{path:string, customName:null, openedAt:number, ides:string[]}>}
  */
 function scanProjectRoots(options = {}) {
   const roots = options.roots ?? defaultProjectRoots(options.env);
@@ -180,11 +396,13 @@ function scanProjectRoots(options = {}) {
       } catch {
         continue; // 没权限的目录跳过，不因为一个目录让整次扫描失败
       }
-      const isProject = entries.some(
-        (entry) => entry.name.toLowerCase() === PROJECT_MARKER && entry.isDirectory(),
-      );
-      if (isProject) {
-        projects.push({ path: dir, customName: null, openedAt: 0 });
+      const names = new Set(entries.map((entry) => entry.name.toLowerCase()));
+      const ides = IDE_MARKERS.filter(
+        (entry) => names.has(entry.marker) && entries.find((e) => e.name.toLowerCase() === entry.marker).isDirectory(),
+      ).map((entry) => entry.ide);
+      if (ides.length > 0) {
+        // 两条来源可能都发现同一个项目，交给 marker 去重时 IDE 列表会合并。
+        projects.push({ path: dir, customName: null, openedAt: 0, ides });
         continue;
       }
       if (depth >= maxDepth) continue;
@@ -201,7 +419,7 @@ function scanProjectRoots(options = {}) {
 
 /**
  * 合并多个来源的项目，按路径去重；重复时保留先出现的（最近使用的在前），
- * 但把对方独有的 tags 并进来。
+ * 但把对方独有的 tags / ides 并进来。
  * @param {...Array<object>} groups
  * @returns {Array<object>}
  */
@@ -216,11 +434,24 @@ function mergeProjects(...groups) {
         for (const tag of project.tags ?? []) {
           if (tag && !existing.tags.includes(tag)) existing.tags.push(tag);
         }
+        for (const ide of project.ides ?? []) {
+          if (!existing.ides.includes(ide)) existing.ides.push(ide);
+        }
+        for (const [ide, time] of Object.entries(project.openedBy ?? {})) {
+          if ((existing.openedBy?.[ide] ?? 0) < time) {
+            existing.openedBy = { ...existing.openedBy, [ide]: time };
+          }
+        }
         if (!existing.customName && project.customName) existing.customName = project.customName;
         if (project.openedAt > existing.openedAt) existing.openedAt = project.openedAt;
         continue;
       }
-      byKey.set(key, { ...project, tags: [...(project.tags ?? [])] });
+      byKey.set(key, {
+        ...project,
+        tags: [...(project.tags ?? [])],
+        ides: [...(project.ides ?? [])],
+        openedBy: { ...(project.openedBy ?? {}) },
+      });
     }
   }
   return [...byKey.values()];
@@ -229,7 +460,11 @@ function mergeProjects(...groups) {
 /**
  * 项目 → 候选条目。标题用目录名（用户认得的名字），IDEA 自定义项目名与
  * 上级目录名放进 tags，搜哪个都能命中。
- * @param {{path:string, customName?:string|null}} project
+ *
+ * ide 决定图标和回车行为：两种 IDE 的标记目录都有时，用编辑时间更新的那个——
+ * 那就是用户最近真正打开它的方式。
+ *
+ * @param {{path:string, customName?:string|null, ides?:string[], markers?:object}} project
  * @returns {object}
  */
 function projectToCandidate(project) {
@@ -240,6 +475,9 @@ function projectToCandidate(project) {
   const parent = path.basename(path.dirname(dir));
   if (parent && parent !== title) tags.push(parent);
 
+  const ide = project.ide ?? 'idea';
+  if (ide !== 'idea') tags.push(ide);
+
   return {
     id: `project:${dir.toLowerCase()}`,
     kind: 'project',
@@ -247,6 +485,9 @@ function projectToCandidate(project) {
     subtitle: dir,
     tags,
     path: dir,
+    ide,
+    // 图标从 IDE 自己的 exe 抽，列表里才能分清 IDEA / Cursor / VS Code。
+    iconFile: project.iconFile ?? null,
   };
 }
 
@@ -336,13 +577,83 @@ function findIdeaExecutable(options = {}) {
   );
 }
 
+/** VS Code 系编辑器的常见安装位置（相对各安装根目录的子路径 + 盘符根目录下的目录名）。 */
+const EDITOR_LAYOUTS = {
+  cursor: {
+    envVar: 'DSH_CURSOR',
+    appDirs: ['Cursor', 'cursor'],
+    rootPattern: /^cursor$/i,
+    exe: path.join('Cursor.exe'),
+  },
+  vscode: {
+    envVar: 'DSH_VSCODE',
+    appDirs: ['Microsoft VS Code', 'Microsoft VS Code Insiders'],
+    rootPattern: /^microsoft vs code$/i,
+    exe: path.join('Code.exe'),
+  },
+};
+
 /**
- * 用 IDEA 打开项目。
+ * 列出可能的 Cursor.exe / Code.exe 路径，按可信度排序。
+ * @param {'cursor'|'vscode'} ide
+ * @param {object} [env]
+ * @param {(dir:string)=>string[]} [listDirs]
+ * @returns {string[]}
+ */
+function editorExecutableCandidates(ide, env = process.env, listDirs = defaultListDirs) {
+  const layout = EDITOR_LAYOUTS[ide];
+  if (!layout) return [];
+  const list = [];
+  if (env[layout.envVar]) list.push(env[layout.envVar]);
+
+  const bases = [];
+  if (env.LOCALAPPDATA) bases.push(path.join(env.LOCALAPPDATA, 'Programs'));
+  if (env.ProgramFiles) bases.push(env.ProgramFiles);
+  if (env['ProgramFiles(x86)']) bases.push(env['ProgramFiles(x86)']);
+  for (const base of bases) {
+    for (const name of listDirs(base)) {
+      if (!layout.appDirs.some((app) => app.toLowerCase() === name.toLowerCase())) continue;
+      list.push(path.join(base, name, layout.exe));
+    }
+  }
+
+  // 便携版：解压到 D:\cursor、D:\Microsoft VS Code 这种盘符根目录下。
+  for (const drive of [env.SystemDrive ?? 'C:', 'D:']) {
+    const root = `${drive}\\`;
+    for (const name of listDirs(root)) {
+      if (!layout.rootPattern.test(name)) continue;
+      list.push(path.join(root, name, layout.exe));
+    }
+  }
+  return [...new Set(list)];
+}
+
+/**
+ * 找某个 IDE 的可执行文件；找不到返回 null。
+ * @param {'idea'|'cursor'|'vscode'} ide
+ * @param {object} [options]
+ * @returns {string|null}
+ */
+function findEditorExecutable(ide, options = {}) {
+  if (ide === 'idea') return findIdeaExecutable(options);
+  const exists = options.exists ?? defaultExists;
+  const listDirs = options.listDirs ?? defaultListDirs;
+  const configured = options[`${ide}Path`];
+  if (typeof configured === 'string' && exists(configured)) return configured;
+  return (
+    editorExecutableCandidates(ide, options.env ?? process.env, listDirs).find((p) =>
+      exists(p),
+    ) ?? null
+  );
+}
+
+/**
+ * 用 IDE 打开项目。
  *
  * detached + unref：IDE 的生命周期不能挂在启动器上，否则关掉启动器会把
  * IDE 一起带走。
  *
- * @param {string} exe idea64.exe（也接受 idea.bat）
+ * @param {string} exe idea64.exe / Cursor.exe / Code.exe（也接受 .bat）
  * @param {string} projectPath
  * @param {{spawn?:Function}} [options]
  */
@@ -366,32 +677,64 @@ function launchIdea(exe, projectPath, options = {}) {
  * @param {object} [options]
  * @param {()=>string[]} [options.roots] 扫描根目录（每次 init 取一次）
  * @param {string} [options.ideaPath] 指定 IDEA 可执行文件（config.json）
- * @param {(o?:object)=>Array} [options.readRecent] 注入最近项目读取（测试用）
+ * @param {string} [options.cursorPath] 指定 Cursor.exe（config.json）
+ * @param {string} [options.vscodePath] 指定 Code.exe（config.json）
+ * @param {(o?:object)=>Array} [options.readRecent] 注入 IDEA 最近项目读取（测试用）
+ * @param {(o?:object)=>Array} [options.readVscodeRecent] 注入编辑器最近项目读取（测试用）
  * @param {(o?:object)=>Array} [options.scan] 注入目录扫描（测试用）
+ * @param {(ide:string, o?:object)=>string|null} [options.findExecutable] 注入 IDE 查找（测试用）
  * @param {Function} [options.spawn] 注入进程启动（测试用）
  */
 function createProjectProvider(options = {}) {
   const readRecent = options.readRecent ?? ((opts) => readRecentProjects(opts));
+  const readVscodeRecent =
+    options.readVscodeRecent ??
+    // 注入了任意一个来源就当作"来源由调用方全权提供"（单测），不去读真实磁盘。
+    (options.readRecent || options.scan
+      ? () => []
+      : (opts) => readVscodeRecentProjects({ ...options, ...opts }));
   const scan = options.scan ?? ((opts) => scanProjectRoots(opts));
-  const findIdea = options.findIdeaExecutable ?? (() => findIdeaExecutable(options));
+  const findExecutable =
+    options.findExecutable ??
+    ((ide) =>
+      // 兼容只注入 IDEA 查找的旧测试/调用方。
+      ide === 'idea' && typeof options.findIdeaExecutable === 'function'
+        ? options.findIdeaExecutable()
+        : findEditorExecutable(ide, options));
 
+  /** ide → 可执行文件；每个只查一次。 */
+  let executableByIde = {};
   let candidates = [];
-  let ideaPath = null;
   let stats = { count: 0 };
+
+  function resolveExecutable(ide) {
+    if (!(ide in executableByIde)) executableByIde[ide] = findExecutable(ide);
+    return executableByIde[ide];
+  }
 
   return {
     id: 'project',
-    aliases: ['项目', 'projects', 'project', 'proj', 'p'],
+    aliases: options.aliases ?? ['项目', 'projects', 'project', 'proj', 'p'],
     label: '项目',
 
     async init() {
       const recent = readRecent();
+      const vscodeRecent = readVscodeRecent();
       const roots = typeof options.roots === 'function' ? options.roots() : options.roots;
       const scanned = scan({ roots });
-      const merged = mergeProjects(recent, scanned);
-      candidates = merged.map(projectToCandidate);
-      ideaPath = ideaPath ?? findIdea();
-      stats = { count: candidates.length, ideaPath };
+      const merged = mergeProjects(recent, vscodeRecent, scanned);
+
+      candidates = merged.map((project) => {
+        const ide = resolveProjectIde(project, options);
+        const exe = resolveExecutable(ide);
+        return projectToCandidate({ ...project, ide, iconFile: exe });
+      });
+      const ideaPath = executableByIde.idea ?? null;
+      stats = {
+        count: candidates.length,
+        ideaPath,
+        ides: [...new Set(candidates.map((item) => item.ide))],
+      };
       return { count: candidates.length, ideaPath };
     },
 
@@ -410,14 +753,17 @@ function createProjectProvider(options = {}) {
         error.code = 'invalid_item';
         throw error;
       }
-      if (!ideaPath) ideaPath = findIdea();
-      if (!ideaPath) {
-        const error = new Error('未找到 IntelliJ IDEA，可在 config.json 里设置 ideaPath');
-        error.code = 'idea_not_found';
+      const ide = item.ide ?? 'idea';
+      const exe = resolveExecutable(ide);
+      if (!exe) {
+        const labels = { idea: ['IntelliJ IDEA', 'ideaPath'], cursor: ['Cursor', 'cursorPath'], vscode: ['VS Code', 'vscodePath'] };
+        const [name, field] = labels[ide] ?? [ide, 'ideaPath'];
+        const error = new Error(`未找到 ${name}，可在 config.json 里设置 ${field}`);
+        error.code = 'ide_not_found';
         throw error;
       }
-      launchIdea(ideaPath, item.path, { spawn: options.spawn });
-      return { opened: item.path, idea: ideaPath };
+      launchIdea(exe, item.path, { spawn: options.spawn });
+      return { opened: item.path, ide, exe };
     },
   };
 }
@@ -426,16 +772,29 @@ module.exports = {
   createProjectProvider,
   parseRecentProjectsXml,
   readRecentProjects,
+  readVscodeRecentProjects,
+  readRecentlyOpenedPaths,
+  readWorkspaceStorageTimes,
+  resolveProjectIde,
   scanProjectRoots,
   mergeProjects,
   projectToCandidate,
   ideaExecutableCandidates,
   findIdeaExecutable,
+  editorExecutableCandidates,
+  findEditorExecutable,
   launchIdea,
+  projectIdeFor,
   defaultProjectRoots,
   defaultRecentProjectsFiles,
   toWindowsPath,
   PROJECT_MARKER,
+  IDE_MARKERS,
   DEFAULT_SCAN_DEPTH,
   SKIP_DIRS,
 };
+
+/** 候选项上给界面用的 IDE 显示名。 */
+function projectIdeFor(ide) {
+  return { idea: 'IDEA', cursor: 'Cursor', vscode: 'VS Code' }[ide] ?? String(ide ?? '');
+}

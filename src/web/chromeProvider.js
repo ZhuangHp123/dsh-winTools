@@ -733,6 +733,19 @@ function createChromeProvider(options = {}) {
   const openUrlFn = options.openUrl ?? ((exe, url, o) => openUrl(exe, url, o));
   const findChrome = options.findChrome ?? (() => findChromeExecutable(options));
   const refreshInterval = options.refreshInterval ?? 15000;
+  // 别名 → 子范围（收藏夹 / 标签页 / 两者）。每次都从 options 现取，
+  // 这样用户改完前缀热更新时，闭包里拿到的也是最新判定。
+  const resolveScope = (alias) => {
+    const fn =
+      options.scopeOf ??
+      ((word) => {
+        const key = String(word ?? '').toLowerCase();
+        if (key === 'b' || key === '书签') return 'bookmark';
+        if (key === 'w') return 'tab';
+        return null;
+      });
+    return fn(alias);
+  };
 
   let tabCandidates = [];
   let bookmarkCandidates = [];
@@ -790,7 +803,8 @@ function createChromeProvider(options = {}) {
   return {
     id: 'chrome',
     // 'b' 只查收藏夹、'w' 只查已打开标签页，其余别名查两者。
-    aliases: ['网页', 'chrome', 'web', 'webpage', '浏览器', '书签', 'b', 'w'],
+    // 具体词来自 config.json 的 prefixes（见 core/prefixes.js），这里只留默认值兜底。
+    aliases: options.aliases ?? ['网页', 'chrome', 'web', 'webpage', '浏览器', '书签', 'b', 'w'],
     label: '网页',
     kind: 'web',
 
@@ -810,10 +824,10 @@ function createChromeProvider(options = {}) {
     },
 
     search(_terms, context = {}) {
-      // 别名决定范围：b / 书签 = 只看收藏夹，w = 只看已打开标签页。
-      const alias = context.query?.alias;
-      if (alias === 'b' || alias === '书签') return [...bookmarkCandidates];
-      if (alias === 'w') return [...tabCandidates];
+      // 别名决定范围：按配置，收藏夹 / 标签页 各自的别名只看自己那一份。
+      const scope = resolveScope(context.query?.alias);
+      if (scope === 'bookmark') return [...bookmarkCandidates];
+      if (scope === 'tab') return [...tabCandidates];
       return [...tabCandidates, ...bookmarkCandidates];
     },
 

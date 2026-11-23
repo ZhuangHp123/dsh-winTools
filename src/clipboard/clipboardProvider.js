@@ -325,7 +325,7 @@ function createClipboardProvider(options = {}) {
 
   return {
     id: 'clipboard',
-    aliases: ['剪贴板', 'clip', 'clipboard', 'cb', 'v'],
+    aliases: options.aliases ?? ['剪贴板', 'clip', 'clipboard', 'cb', 'v'],
     label: '剪贴板',
 
     async init() {
