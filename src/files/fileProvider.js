@@ -345,7 +345,7 @@ function createFileProvider(options = {}) {
 
   return {
     id: 'file',
-    aliases: ['文件', 'files', 'file'],
+    aliases: ['文件', 'files', 'file', 'f'],
     label: '文件',
 
     async init() {

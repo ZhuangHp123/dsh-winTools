@@ -789,7 +789,8 @@ function createChromeProvider(options = {}) {
 
   return {
     id: 'chrome',
-    aliases: ['网页', 'chrome', 'web', 'webpage', '浏览器', '书签'],
+    // 'b' 只查收藏夹、'w' 只查已打开标签页，其余别名查两者。
+    aliases: ['网页', 'chrome', 'web', 'webpage', '浏览器', '书签', 'b', 'w'],
     label: '网页',
     kind: 'web',
 
@@ -808,7 +809,11 @@ function createChromeProvider(options = {}) {
       };
     },
 
-    search() {
+    search(_terms, context = {}) {
+      // 别名决定范围：b / 书签 = 只看收藏夹，w = 只看已打开标签页。
+      const alias = context.query?.alias;
+      if (alias === 'b' || alias === '书签') return [...bookmarkCandidates];
+      if (alias === 'w') return [...tabCandidates];
       return [...tabCandidates, ...bookmarkCandidates];
     },
 

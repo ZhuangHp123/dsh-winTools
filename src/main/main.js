@@ -83,6 +83,15 @@ let saveUsageTimer = null;
 /** 最近一轮搜索的完整条目，key 是 id。activate 用。 */
 let lastResults = new Map();
 
+// 冒烟跑在独立 userData 下：真实启动器可能正开着，共用目录会被单实例锁直接踢掉；
+// 顺带也不会把冒烟写出来的剪贴板/用量记录塞进用户的真实数据。
+// 退出时目录还锁着删不掉，所以在启动前清上一次的。
+if (process.env.DSH_SMOKE === '1') {
+  const smokeUserData = path.join(app.getPath('temp'), 'dsh-smoke');
+  fs.rmSync(smokeUserData, { recursive: true, force: true });
+  app.setPath('userData', smokeUserData);
+}
+
 /** 单实例：第二次启动直接把已有窗口叫出来，不要开两个托盘图标。 */
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -532,6 +541,7 @@ function registerIpc() {
       errors: result.errors,
       query: {
         providerHint: result.query.providerHint,
+        alias: result.query.alias ?? null,
         keyword: result.query.keyword,
       },
     };

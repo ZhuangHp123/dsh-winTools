@@ -58,15 +58,21 @@ function escapeHtml(value) {
  */
 const PROVIDER_KIND = { chrome: 'web', dingtalk: 'contact', dingdoc: 'doc' };
 
-function renderMode(hint) {
-  if (!hint) {
+/**
+ * 单个字母别名对应的范围标签。同一个 provider 用别名切了子集时
+ * （b = 收藏夹、w = 标签页），徽标要跟着变，否则两个都显示"网页"。
+ */
+const ALIAS_LABEL = { b: '收藏夹', w: '标签页', dc: '钉钉联系人', dd: '钉钉文档' };
+
+function renderMode(providerHint, alias) {
+  if (!providerHint) {
     modeEl.hidden = true;
     modeEl.textContent = '';
     return;
   }
-  const kind = PROVIDER_KIND[hint] ?? hint;
+  const kind = PROVIDER_KIND[providerHint] ?? providerHint;
   modeEl.hidden = false;
-  modeEl.textContent = KIND_LABEL[kind] ?? hint;
+  modeEl.textContent = ALIAS_LABEL[alias] ?? KIND_LABEL[kind] ?? providerHint;
 }
 
 function renderResults() {
@@ -184,7 +190,8 @@ function scrollActiveIntoView() {
 function renderEmpty(query) {
   if (items.length > 0) return;
   if (!query.trim()) {
-    emptyEl.textContent = '输入关键字开始搜索；应用/项目/网页/联系人/文档/文件/剪贴板 可锁定搜索范围';
+    emptyEl.textContent =
+      '输入关键字开始搜索；a 应用 / f 文件 / b 收藏夹 / w 标签页 / p 项目 / c 联系人 / dd 钉钉文档 / v 剪贴板 可锁定范围';
   } else if (status.indexing) {
     emptyEl.textContent = '没有匹配结果（文件索引仍在构建中，稍后再试）';
   } else {
@@ -237,7 +244,7 @@ async function search() {
     return (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9);
   });
   activeIndex = items.length > 0 ? 0 : -1;
-  renderMode(response?.query?.providerHint ?? null);
+  renderMode(response?.query?.providerHint ?? null, response?.query?.alias ?? null);
   renderResults();
   renderEmpty(query);
 

@@ -93,6 +93,15 @@ async function run({ app, win, query }) {
   await shot('smoke-web.png');
   console.log('[smoke] 锁定网页', JSON.stringify(await readRows()));
 
+  // 英文前缀：b 只出收藏夹，w 只出已打开标签页。
+  await type('b ' + (process.env.DSH_SMOKE_WEB || 'cfmoto'));
+  await shot('smoke-bookmarks.png');
+  console.log('[smoke] 前缀 b(收藏夹)', JSON.stringify(await readRows()));
+
+  await type('w ' + (process.env.DSH_SMOKE_WEB || 'cfmoto'));
+  await shot('smoke-tabs.png');
+  console.log('[smoke] 前缀 w(标签页)', JSON.stringify(await readRows()));
+
   // 钉钉：锁定搜索会走 MCP（可能触发 OAuth），冒烟里只验证界面能画出结果/状态。
   // 没登录时状态栏会给出原因，这本身也是要验证的一部分。
   await type('联系人 ' + (process.env.DSH_SMOKE_CONTACT || '张'));

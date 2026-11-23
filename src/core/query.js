@@ -68,14 +68,14 @@ function tokenize(input) {
  * 解析查询。
  * @param {string} input 原始输入
  * @param {Array<{id:string, aliases?:string[]}>} providers 已注册的 provider
- * @returns {{raw:string, terms:string[], providerHint:string|null, keyword:string}}
+ * @returns {{raw:string, terms:string[], providerHint:string|null, alias:string|null, keyword:string}}
  */
 function parseQuery(input, providers = []) {
   const raw = String(input ?? '');
   const trimmed = raw.trim();
 
   if (!trimmed) {
-    return { raw, terms: [], providerHint: null, keyword: '' };
+    return { raw, terms: [], providerHint: null, alias: null, keyword: '' };
   }
 
   const firstChar = trimmed[0];
@@ -86,6 +86,7 @@ function parseQuery(input, providers = []) {
       raw,
       terms: tokenize(rest),
       providerHint: trigger,
+      alias: null,
       keyword: rest,
     };
   }
@@ -100,12 +101,15 @@ function parseQuery(input, providers = []) {
         raw,
         terms: rest,
         providerHint: matched,
+        // 命中的原词。同一个 provider 可能有多个别名（网页 vs 收藏夹），
+        // provider 靠它进一步收窄范围；只拿 id 分不出来。
+        alias: head,
         keyword: rest.join(' '),
       };
     }
   }
 
-  return { raw, terms: tokens, providerHint: null, keyword: trimmed };
+  return { raw, terms: tokens, providerHint: null, alias: null, keyword: trimmed };
 }
 
 /** 首词命中 provider 的 id 或任一别名（大小写不敏感）。 */

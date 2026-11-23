@@ -502,6 +502,35 @@ test('provider：标签页列表为空时不报错', async () => {
   provider.dispose();
 });
 
+test('provider：b 只返回收藏夹，w 只返回标签页', async () => {
+  const provider = makeProvider();
+  await provider.init();
+  await provider.refresh();
+
+  const onlyBookmarks = provider.search([], { query: { alias: 'b' } });
+  const onlyTabs = provider.search([], { query: { alias: 'w' } });
+  const both = provider.search([], { query: { alias: 'chrome' } });
+  const bookmarksCn = provider.search([], { query: { alias: '书签' } });
+
+  assert.ok(onlyBookmarks.length > 0);
+  assert.ok(onlyBookmarks.every((item) => item.source === 'bookmark'));
+  assert.ok(onlyTabs.length > 0);
+  assert.ok(onlyTabs.every((item) => item.source === 'tab'));
+  assert.equal(both.length, onlyBookmarks.length + onlyTabs.length);
+  // 中文别名「书签」和 b 同义，范围也要一致
+  assert.equal(bookmarksCn.length, onlyBookmarks.length);
+  provider.dispose();
+});
+
+test('provider：没有别名线索时默认返回标签页 + 收藏夹', async () => {
+  const provider = makeProvider();
+  await provider.init();
+  await provider.refresh();
+  assert.equal(provider.search([], {}).length, 6);
+  assert.equal(provider.search([], { query: {} }).length, 6);
+  provider.dispose();
+});
+
 test('provider：refresh 同时更新标签页和收藏夹', async () => {
   let round = 0;
   const provider = makeProvider({

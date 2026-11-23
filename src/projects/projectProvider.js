@@ -381,7 +381,7 @@ function createProjectProvider(options = {}) {
 
   return {
     id: 'project',
-    aliases: ['项目', 'projects', 'project', 'proj'],
+    aliases: ['项目', 'projects', 'project', 'proj', 'p'],
     label: '项目',
 
     async init() {

@@ -50,6 +50,42 @@ test('provider 名大小写不敏感', () => {
   assert.equal(parseQuery('APP chrome', providers).providerHint, 'app');
 });
 
+test('命中别名时回传命中的原词，大小写归一', () => {
+  assert.equal(parseQuery('a chrome', providers).alias, 'a');
+  assert.equal(parseQuery('程序 chrome', providers).alias, '程序');
+  assert.equal(parseQuery('A chrome', providers).alias, 'a');
+});
+
+test('未锁定 provider 时 alias 为 null', () => {
+  assert.equal(parseQuery('chrome', providers).alias, null);
+  assert.equal(parseQuery('zzz chrome', providers).alias, null);
+  assert.equal(parseQuery('', providers).alias, null);
+  assert.equal(parseQuery('= 1+1', providers).alias, null);
+});
+
+test('单字母别名只在独立首词时生效，粘在一起不算', () => {
+  // 搜以 a 开头的普通词，不该被当成「限定 app」
+  for (const input of ['abc', 'b站', 'a软件', 'f文件']) {
+    const q = parseQuery(input, providers);
+    assert.equal(q.providerHint, null, `${input} 被误判成限定查询`);
+    assert.deepEqual(q.terms, [input]);
+  }
+});
+
+test('单独输入别名本身不锁定（保持普通查询）', () => {
+  for (const input of ['a', 'f', 'App']) {
+    const q = parseQuery(input, providers);
+    assert.equal(q.providerHint, null, `${input} 被当成空查询`);
+    assert.equal(q.keyword, input);
+  }
+});
+
+test('别名 + 空格但没有查询词时，剥出空词元', () => {
+  const q = parseQuery('a   ', providers);
+  assert.equal(q.providerHint, null, '没有查询词就不锁定');
+  assert.deepEqual(q.terms, ['a']);
+});
+
 test('只有一个词且是 provider 名时，也锁定但查询为空', () => {
   const q = parseQuery('file', providers);
   assert.equal(q.providerHint, null, '单词查询不该被当成限定了 provider 的空查询');
