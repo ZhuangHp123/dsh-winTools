@@ -189,6 +189,8 @@ function createEngine(options = {}) {
       providerWeights: options.providerWeights,
       now: now(),
       limit,
+      // 空查询用于"最近使用"：只留真正被选过的条目，别把整份应用列表倒出来。
+      onlyUsed: query.terms.length === 0,
     });
 
     return { query, items, errors, stale: false };

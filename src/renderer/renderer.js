@@ -327,6 +327,17 @@ function renderStatus() {
   statusRight.textContent = status.hotkey ? status.hotkey : status.trayAvailable ? '托盘' : '';
 }
 
+/**
+ * 空输入时列出「最近使用」：靠主进程按 usage 记录筛出真被选过的条目。
+ * 只走 ↓ 触发——每次唤起都自动铺一页会盖掉"就一个输入框"的清爽感。
+ */
+function showRecents() {
+  search().catch((error) => {
+    statusLeft.classList.add('warn');
+    statusLeft.textContent = `读取最近使用失败：${error?.message ?? error}`;
+  });
+}
+
 async function search() {
   const query = input.value;
   const token = (searchToken += 1);
@@ -619,6 +630,10 @@ async function saveSettings() {
 input.addEventListener('input', scheduleSearch);
 
 input.addEventListener('keydown', (event) => {
+  // 中文/日文输入法组词中，回车是「上屏选字」、方向键是「在候选里跳」，
+  // 这里必须放手；否则打「张三」时按回车直接把当前结果执行了。
+  // keyCode 229 是部分输入法上报的旧式组词标记，一并放过。
+  if (event.isComposing || event.keyCode === 229) return;
   // 设置页独立处理按键：输入框在这里只是过滤辅助，回车=保存，Esc=取消。
   if (settingsOpen) {
     if (event.key === 'Escape') {
@@ -636,11 +651,14 @@ input.addEventListener('keydown', (event) => {
   switch (event.key) {
     case 'ArrowDown':
       event.preventDefault();
-      move(1);
+      // 空输入按 ↓：不用先打字就能挑「最近使用」。
+      if (!input.value.trim() && items.length === 0) showRecents();
+      else move(1);
       break;
     case 'ArrowUp':
       event.preventDefault();
-      move(-1);
+      if (!input.value.trim() && items.length === 0) showRecents();
+      else move(-1);
       break;
     case 'Enter':
       event.preventDefault();
@@ -708,9 +726,10 @@ window.launcher.onOpenSettings(() => {
   if (!settingsOpen) openSettings();
 });
 
-// 设置列表里的输入框：回车保存，Esc 取消。
+// 设置列表里的输入框：回车保存，Esc 取消。组词中的回车同样是输入法选字。
 settingsListEl.addEventListener('keydown', (event) => {
   if (!settingsOpen) return;
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === 'Enter') {
     event.preventDefault();
     saveSettings();

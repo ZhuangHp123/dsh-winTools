@@ -127,13 +127,18 @@ function rankCandidates(terms, candidates, options = {}) {
   if (!Array.isArray(candidates) || candidates.length === 0) return [];
 
   // 空查询：不算分，只按使用习惯 + provider 权重排（用于"刚打开时展示常用"）。
+  // onlyUsed 时只保留真被选过的条目——否则会把几百个 score=0 的候选也塞进来，
+  // "最近使用"就成了一屏随机应用。
   if (!Array.isArray(terms) || terms.length === 0) {
-    const scored = candidates.map((candidate, index) => {
+    const onlyUsed = Boolean(options.onlyUsed);
+    const scored = [];
+    candidates.forEach((candidate, index) => {
       const usage = options.usageStore?.get(candidateKey(candidate));
+      if (onlyUsed && !(usage && usage.count > 0)) return;
       const base = usageScore(usage, options.now ?? Date.now());
       const providerBonus =
         (options.providerWeights ?? DEFAULT_PROVIDER_WEIGHT)[candidate.provider] ?? 0;
-      return { candidate, score: base + providerBonus, index };
+      scored.push({ candidate, score: base + providerBonus, index });
     });
     scored.sort((a, b) => b.score - a.score || a.index - b.index);
     return scored.slice(0, limit).map(({ candidate, score }) => ({ ...candidate, score }));

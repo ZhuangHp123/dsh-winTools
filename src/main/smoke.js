@@ -10,6 +10,34 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { screen } = require('electron');
+
+/**
+ * 主进程集成的只读探针：显示器定位与开机启动参数。
+ * 只读不写——真调 setLoginItemSettings 会改本机启动项，冒烟不该有这个副作用。
+ */
+function checkSystemIntegration() {
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const login = app_loginInfo();
+  return {
+    displays: screen.getAllDisplays().length,
+    nearestDisplayId: display?.id ?? null,
+    cursor,
+    autostartQuery: login,
+  };
+}
+
+function app_loginInfo() {
+  try {
+    const { app } = require('electron');
+    const args = app.isPackaged ? [] : [path.resolve(__dirname, '../..')];
+    const settings = app.getLoginItemSettings({ path: process.execPath, args });
+    return { openAtLogin: Boolean(settings.openAtLogin), executableWillLaunchAtLogin: settings.executableWillLaunchAtLogin ?? null };
+  } catch (error) {
+    return { error: String(error?.message ?? error) };
+  }
+}
 
 async function run({ app, win, query }) {
   const outDir = path.join(__dirname, '../../tmp');
@@ -73,6 +101,17 @@ async function run({ app, win, query }) {
   await type(query);
   await shot('smoke-query.png');
   console.log('[smoke] 查询', JSON.stringify(await readRows()));
+
+  // 输入法组词时的回车不该触发执行：模拟 isComposing 的 Enter。
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const input = document.getElementById('query');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }));
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  console.log('[smoke] 组词回车后仍在', JSON.stringify(await readRows()));
 
   // 键盘导航：下移一格应换 active。
   await win.webContents.executeJavaScript(`
@@ -173,10 +212,28 @@ async function run({ app, win, query }) {
   `);
   console.log('[smoke] 执行剪贴板项', JSON.stringify(activateResult));
 
+  // 空输入按 ↓：只用过的那条（刚执行的剪贴板项）应出现在「最近使用」里。
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const input = document.getElementById('query');
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      return true;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await shot('smoke-recents.png');
+  const recents = await readRows();
+  console.log('[smoke] 最近使用', JSON.stringify({ count: recents.count, titles: recents.rows.map((r) => r.title) }));
+
   // 状态：热键与索引状态要能从渲染进程读到。
   const statusResult = await win.webContents.executeJavaScript('window.launcher.status()');
   console.log('[smoke] 状态', JSON.stringify(statusResult));
 
+  // 主进程侧：多屏定位与开机启动的参数要能算出来且不抛错。
+  // 真去改注册表的 setLoginItemSettings 不在冒烟里调，避免污染本机启动项。
+  console.log('[smoke] 系统集成', JSON.stringify(checkSystemIntegration()));
   // 设置页：托盘菜单是唯一入口，这里直接走同一条 IPC 通道触发。
   win.webContents.send('launcher:openSettings');
   await new Promise((resolve) => setTimeout(resolve, 700));

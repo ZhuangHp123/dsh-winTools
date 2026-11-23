@@ -203,7 +203,10 @@ function createWindow() {
 
 function positionWindow() {
   if (!win) return;
-  const { workArea } = screen.getPrimaryDisplay();
+  // 多屏时弹在鼠标所在的那块屏上——用户刚在副屏操作，窗口却跑到主屏
+  // 会让人以为没反应。单屏下等同于主屏，行为不变。
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const { workArea } = display;
   const x = Math.round(workArea.x + (workArea.width - WINDOW_WIDTH) / 2);
   const y = Math.round(workArea.y + workArea.height * 0.22);
   win.setPosition(x, y);
@@ -215,8 +218,9 @@ function showWindow() {
   win.show();
   win.focus();
   win.webContents.send('launcher:shown');
-  // 标签页变化频繁，唤起时顺手刷一轮，避免搜到过期标题。
-  chromeProvider?.refresh?.().catch(() => {});
+  // 标签页变化频繁，唤起时顺手刷一轮，避免搜到过期标题；
+  // 顺带把隐藏期间停掉的定时刷新恢复。
+  chromeProvider?.resumePolling?.();
 }
 
 /**
@@ -245,6 +249,8 @@ function resurfaceWindow() {
 function hideWindow() {
   if (!win || !win.isVisible()) return;
   win.hide();
+  // 窗口藏起来时没必要每 15 秒枚举一次浏览器标签页（每次要起 PowerShell）。
+  chromeProvider?.pausePolling?.();
   flushUsage();
 }
 
@@ -271,43 +277,80 @@ function createTray() {
     return;
   }
   tray.setToolTip(`dsh-winTools（${registeredHotkey ?? '无热键'}）`);
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '显示搜索', click: () => showWindow() },
-      { label: '自定义搜索前缀…', click: () => openSettingsWindow() },
-      { label: '重新索引文件', click: () => reindexFiles() },
-      {
-        label: '登录钉钉（联系人/文档）',
-        click: async () => {
-          try {
-            // 已有可用 token 的端点直接跳过：不然每点一次都要在浏览器里重新同意一遍。
-            const managers = Object.values(dingtalkOAuth ?? {});
-            const pending = [];
-            for (const manager of managers) {
-              const token = await manager.currentToken().catch(() => null);
-              if (!token) pending.push(manager);
-            }
-            if (pending.length === 0) {
-              setDingtalkNotice('已登录，无需重新授权');
-            } else {
-              setDingtalkNotice('请在浏览器里完成钉钉授权…');
-              // 串行而不是并发：每个端点一个回调端口，同时开会连开多个授权页，
-              // 用户不知道先点哪个。
-              for (const manager of pending) await manager.login();
-              setDingtalkNotice('');
-            }
-          } catch (error) {
-            setDingtalkNotice('');
-            startupErrors.push(`钉钉登录失败：${error?.message ?? error}`);
-          }
-          sendStatus();
-        },
-      },
-      { type: 'separator' },
-      { label: '退出', click: () => quitApp() },
-    ]),
-  );
+  tray.setContextMenu(buildTrayMenu());
   tray.on('click', () => showWindow());
+}
+
+/**
+ * 开机启动的注册参数。
+ * 打包后 process.execPath 就是启动器本体，直接注册即可；开发期跑的是
+ * electron.exe，「.」应用路径得作为参数带上，否则开机只会弹一个 Electron 空窗口。
+ */
+function autostartArgs() {
+  if (app.isPackaged) return [];
+  return [path.resolve(__dirname, '../..')];
+}
+
+function isAutostartEnabled() {
+  try {
+    return Boolean(app.getLoginItemSettings({ path: process.execPath, args: autostartArgs() }).openAtLogin);
+  } catch {
+    return false;
+  }
+}
+
+function setAutostart(enabled) {
+  try {
+    app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: autostartArgs() });
+  } catch (error) {
+    startupErrors.push(`设置开机启动失败：${error?.message ?? error}`);
+  }
+  // 勾选状态要立刻反映到菜单上，否则用户看不到自己点没点成功。
+  tray?.setContextMenu(buildTrayMenu());
+  sendStatus();
+}
+
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
+    { label: '显示搜索', click: () => showWindow() },
+    { label: '自定义搜索前缀…', click: () => openSettingsWindow() },
+    {
+      label: '开机启动',
+      type: 'checkbox',
+      checked: isAutostartEnabled(),
+      click: (item) => setAutostart(item.checked),
+    },
+    { label: '重新索引文件', click: () => reindexFiles() },
+    {
+      label: '登录钉钉（联系人/文档）',
+      click: async () => {
+        try {
+          // 已有可用 token 的端点直接跳过：不然每点一次都要在浏览器里重新同意一遍。
+          const managers = Object.values(dingtalkOAuth ?? {});
+          const pending = [];
+          for (const manager of managers) {
+            const token = await manager.currentToken().catch(() => null);
+            if (!token) pending.push(manager);
+          }
+          if (pending.length === 0) {
+            setDingtalkNotice('已登录，无需重新授权');
+          } else {
+            setDingtalkNotice('请在浏览器里完成钉钉授权…');
+            // 串行而不是并发：每个端点一个回调端口，同时开会连开多个授权页，
+            // 用户不知道先点哪个。
+            for (const manager of pending) await manager.login();
+            setDingtalkNotice('');
+          }
+        } catch (error) {
+          setDingtalkNotice('');
+          startupErrors.push(`钉钉登录失败：${error?.message ?? error}`);
+        }
+        sendStatus();
+      },
+    },
+    { type: 'separator' },
+    { label: '退出', click: () => quitApp() },
+  ]);
 }
 
 /**

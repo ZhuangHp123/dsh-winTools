@@ -25,6 +25,7 @@
  */
 
 const { createMcpClient, unwrapToolResult } = require('./mcpClient');
+const { pinyinInitials } = require('../core/pinyin');
 
 // 通讯录端点上真正的搜索工具。名字很像的 search_user_by_key_word 只回 userId 数组，
 // 不带姓名，还要再补一次查人接口，白跑一轮。
@@ -159,6 +160,9 @@ function initialsOf(name) {
 function contactToCandidate(contact, options = {}) {
   const subtitleParts = [contact.dept, contact.nick].filter(Boolean);
   const subtitle = subtitleParts.length > 0 ? `${subtitleParts.join('  ·  ')}  ·  钉钉联系人` : '钉钉联系人';
+  // 拼音首字母放进 altTitles：本地按 hp 命中庄浩鹏后，排序层的模糊匹配
+  // （只认姓名文本）会把它当不匹配丢掉，靠 altTitles 才能保住这条。
+  const pinyin = contact.pinyin ?? pinyinInitials(contact.name);
   return {
     // 同名同事（重名）靠数字 uid 区分，id 必须带上它，否则 lastResults 会互相覆盖
     id: `dingtalk:user:${contact.uid ?? contact.userId}`,
@@ -167,6 +171,7 @@ function contactToCandidate(contact, options = {}) {
     title: contact.name,
     subtitle,
     initials: initialsOf(contact.name),
+    altTitles: pinyin ? [pinyin] : undefined,
     tags: [contact.dept, contact.userId, contact.uid].filter(Boolean),
     userId: contact.userId,
     uid: contact.uid || undefined,
@@ -207,6 +212,41 @@ function matchesTerms(terms, ...values) {
   if (!Array.isArray(terms) || terms.length === 0) return false;
   const haystack = values.filter(Boolean).join(' ').toLowerCase();
   return terms.every((term) => haystack.includes(String(term).toLowerCase()));
+}
+
+/** 纯西文（字母）词元才走拼音首字母：中文词元直接按姓名匹配。 */
+const ASCII_WORD = /^[a-z]+$/i;
+
+/**
+ * 拼音首字母是否为词元的有序子序列。
+ * 服务端把 "hp" 认作庄浩鹏（zhp），本地用同一口径，避免同一个词本地查不到、
+ * 走网络才出结果。子序列而不是前缀：允许跳字（zhp 命中 hp、zsf 命中 zf）。
+ */
+function initialsMatch(term, initials) {
+  if (!ASCII_WORD.test(term) || !initials) return false;
+  const needle = term.toLowerCase();
+  const haystack = initials.toLowerCase();
+  let hi = 0;
+  for (let ni = 0; ni < needle.length; ni += 1) {
+    hi = haystack.indexOf(needle[ni], hi);
+    if (hi === -1) return false;
+    hi += 1;
+  }
+  return true;
+}
+
+/**
+ * 本地联系人匹配：姓名/别名/工号/部门任一命中，或者输入的拉丁字母是
+ * 姓名拼音首字母的有序子序列（hp → 庄浩鹏）。
+ */
+function contactMatches(terms, entry) {
+  if (!Array.isArray(terms) || terms.length === 0) return false;
+  const initials = entry.pinyin ?? pinyinInitials(entry.name);
+  return terms.every(
+    (term) =>
+      matchesTerms([term], entry.name, entry.nick, entry.alias, entry.userId, entry.uid, entry.dept) ||
+      initialsMatch(String(term), initials),
+  );
 }
 
 /**
@@ -341,7 +381,7 @@ function createContactProvider(options = {}) {
 
 function localMatches(pool, terms) {
   return pool
-    .filter((entry) => matchesTerms(terms, entry.name, entry.nick, entry.alias, entry.userId, entry.uid, entry.dept))
+    .filter((entry) => contactMatches(terms, entry))
     .map((contact) => contactToCandidate(contact));
 }
 

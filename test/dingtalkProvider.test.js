@@ -247,6 +247,42 @@ test('worthRemoteQuery：中文单字也查，西文单字符不查', () => {
   assert.equal(worthRemoteQuery('  '), false);
 });
 
+test('联系人 provider：本地拼音首字母命中，且不打网络', async () => {
+  const fetch = fakeFetch([]);
+  const provider = createContactProvider({
+    mcpUrl: 'https://mcp-gw.example/contacts',
+    openExternal: async () => {},
+    cache: { load: async () => ({ contacts: [] }) },
+    loadLocal: () => ({
+      selfUid: '1000',
+      people: [
+        { uid: '1001', name: '庄浩鹏', alias: '', dept: '研发', userId: 'user1' },
+        { uid: '1002', name: '张三丰', alias: '', dept: '研发', userId: 'user2' },
+      ],
+    }),
+    fetch,
+  });
+  await provider.init();
+
+  const items = await provider.search(['hp'], { query: { keyword: 'hp', providerHint: 'dingtalk' } });
+  assert.deepEqual(items.map((item) => item.title), ['庄浩鹏']);
+  // 拼音命中走本地，不该为此发起 OAuth 网络请求。
+  assert.equal(fetch.calls.length, 0);
+});
+
+test('联系人 provider：拼音首字母是姓名首字母的有序子序列即可命中', async () => {
+  const provider = createContactProvider({
+    cache: { load: async () => ({ contacts: [] }) },
+    loadLocal: () => ({
+      selfUid: '1000',
+      people: [{ uid: '1001', name: '张三丰', alias: '', dept: '研发', userId: 'user1' }],
+    }),
+  });
+  await provider.init();
+  const items = await provider.search(['zf'], { query: { keyword: 'zf', providerHint: 'dingtalk' } });
+  assert.deepEqual(items.map((item) => item.title), ['张三丰']);
+});
+
 test('联系人 provider：普通搜索只查缓存，不打网络', async () => {
   const fetch = fakeFetch([]);
   const provider = createContactProvider({

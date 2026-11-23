@@ -179,7 +179,9 @@ test('后发起的查询让前一轮作废（stale）', async () => {
 
 test('空查询也走 provider（用于展示常用项）', async () => {
   let receivedEmpty = null;
-  const engine = createEngine();
+  const engine = createEngine({
+    usageStore: { get: (key) => (key === 'app:recent-app' ? { count: 3, lastUsed: NOW } : null) },
+  });
   engine.register({
     id: 'app',
     search: async (terms, ctx) => {
@@ -190,7 +192,20 @@ test('空查询也走 provider（用于展示常用项）', async () => {
 
   const { items } = await engine.search('');
   assert.equal(receivedEmpty, true, 'provider 应知道这是空查询');
-  assert.equal(items.length, 1, '空查询不该把候选过滤光');
+  assert.equal(items.length, 1, '用过的条目在空查询里应保留');
+});
+
+test('空查询只留用过的条目，不把整个候选池倒出来', async () => {
+  const engine = createEngine({
+    usageStore: { get: (key) => (key === 'app:used' ? { count: 2, lastUsed: NOW } : null) },
+  });
+  engine.register({
+    id: 'app',
+    search: async () => [{ title: 'used' }, { title: 'never-used' }],
+  });
+
+  const { items } = await engine.search('');
+  assert.deepEqual(items.map((item) => item.title), ['used']);
 });
 
 test('activate 调用对应 provider 并记录使用', async () => {

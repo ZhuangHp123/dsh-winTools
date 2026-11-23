@@ -905,6 +905,17 @@ function createChromeProvider(options = {}) {
       return refreshing;
     },
 
+    /** 窗口隐藏时暂停定时刷新：每次枚举都要起 PowerShell，常驻后台纯属白烧。 */
+    pausePolling() {
+      stopPolling();
+    },
+
+    /** 窗口唤起时恢复定时刷新，并立刻补一轮（标题可能已经变了）。 */
+    resumePolling() {
+      startPolling();
+      if (refreshInterval > 0) refreshTabs().catch(() => {});
+    },
+
     dispose() {
       stopPolling();
     },
