@@ -50,10 +50,14 @@ const { createJsonCache } = require('./persistence');
 const { createWorkerScan } = require('./workerScan');
 const { resolveHotkey, hotkeyCandidates } = require('./hotkey');
 
-const WINDOW_WIDTH = 680;
-const WINDOW_HEIGHT = 440;
-/** 空状态只留搜索框时的高度下限。渲染进程量出实际行高后会下发精确值。 */
-const MIN_WINDOW_HEIGHT = 40;
+const CONTENT_WIDTH = 680;
+const CONTENT_HEIGHT = 440;
+/** 窗口比内容多留的一圈透明边距，给卡片投影留出淡出的空间。 */
+const SHADOW_PAD = 24;
+const WINDOW_WIDTH = CONTENT_WIDTH + SHADOW_PAD * 2;
+const WINDOW_HEIGHT = CONTENT_HEIGHT + SHADOW_PAD * 2;
+/** 空状态只留搜索框时的高度下限（内容高度，不含边距）。渲染进程量出实际行高后会下发精确值。 */
+const MIN_CONTENT_HEIGHT = 40;
 
 /** 收集启动期错误，界面底部显示，别让失败静默。 */
 const startupErrors = [];
@@ -81,6 +85,7 @@ let avatarStore = null;
 let usagePersist = null;
 let registeredHotkey = null;
 let isQuitting = false;
+let mouseIgnored = false;
 let saveUsageTimer = null;
 /** 最近一轮搜索的完整条目，key 是 id。activate 用。 */
 let lastResults = new Map();
@@ -509,17 +514,27 @@ function collectStatus() {
 }
 
 function registerIpc() {
+  // 窗口四周有一圈透明边，那片区域不该吃掉鼠标事件（点它会触发 blur 把窗口藏掉）。
+  // 渲染进程按指针是否落在卡片上来切换。
+  ipcMain.on('launcher:setIgnoreMouse', (_event, ignore) => {
+    if (!win) return;
+    mouseIgnored = Boolean(ignore);
+    win.setIgnoreMouseEvents(mouseIgnored, { forward: true });
+  });
   ipcMain.handle('launcher:setCompact', (_event, payload) => {
     if (!win) return { ok: false };
     const compact = Boolean(payload?.compact);
-    // 渲染进程量出的行高优先；异常值夹在合理范围内，别把窗口缩没了。
+    // 渲染进程量出的内容行高优先；异常值夹在合理范围内，别把窗口缩没了。
     const measured = Math.round(Number(payload?.height));
-    const height = compact
-      ? Math.min(WINDOW_HEIGHT, Math.max(MIN_WINDOW_HEIGHT, measured || MIN_WINDOW_HEIGHT))
-      : WINDOW_HEIGHT;
+    const content = compact
+      ? Math.min(CONTENT_HEIGHT, Math.max(MIN_CONTENT_HEIGHT, measured || MIN_CONTENT_HEIGHT))
+      : CONTENT_HEIGHT;
     const bounds = win.getBounds();
-    win.setBounds({ x: bounds.x, y: bounds.y, width: WINDOW_WIDTH, height }, false);
-    return { ok: true, height };
+    win.setBounds(
+      { x: bounds.x, y: bounds.y, width: WINDOW_WIDTH, height: content + SHADOW_PAD * 2 },
+      false,
+    );
+    return { ok: true, height: content };
   });
 
   ipcMain.handle('launcher:search', async (_event, input) => {

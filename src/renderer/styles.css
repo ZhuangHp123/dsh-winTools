@@ -12,6 +12,9 @@
   --bg-row-hover: rgba(255, 255, 255, 0.05);
   --bg-row-active: linear-gradient(90deg, rgba(84, 142, 255, 0.28), rgba(84, 142, 255, 0.08));
   --radius: 15px;
+  /* 与主进程 SHADOW_PAD 保持一致：窗口比卡片多出的一圈透明边距，
+     否则投影会被窗口边界裁成方块暗角。 */
+  --shadow-pad: 24px;
   --font: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
 }
 
@@ -34,10 +37,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 投影要画到卡片外面去，所以给窗口四周留一圈透明边。 */
+body {
+  padding: var(--shadow-pad);
+}
+
 .launcher {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
   /* 一层蓝色辉光环 + 深投影 + 顶部内高光，模拟玻璃边缘受光。 */
   border: 1px solid var(--border);

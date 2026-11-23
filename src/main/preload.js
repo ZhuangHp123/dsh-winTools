@@ -15,7 +15,8 @@ contextBridge.exposeInMainWorld('launcher', {
   avatar: (id) => ipcRenderer.invoke('launcher:avatar', id),
   status: () => ipcRenderer.invoke('launcher:status'),
   setCompact: (payload) => ipcRenderer.invoke('launcher:setCompact', payload),
-  hide: () => ipcRenderer.invoke('launcher:hide'),
+  // 窗口四周有一圈透明边（给投影留空间）；让那圈不拦截鼠标。
+  setIgnoreMouse: (ignore) => ipcRenderer.send('launcher:setIgnoreMouse', Boolean(ignore)),  hide: () => ipcRenderer.invoke('launcher:hide'),
   reindex: () => ipcRenderer.invoke('launcher:reindex'),
   openExternal: (url) => ipcRenderer.invoke('launcher:openExternal', url),
   onShown: (callback) => {

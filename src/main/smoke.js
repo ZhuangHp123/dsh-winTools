@@ -78,6 +78,23 @@ async function run({ app, win, query }) {
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log('[smoke] 下移后', JSON.stringify(await readRows()));
 
+  // 透明边不吃鼠标：指针在卡片外要切到穿透，回到卡片上要恢复。
+  const probeMouse = async (label, x, y) => {
+    await win.webContents.executeJavaScript(`
+      (() => {
+        const el = document.elementFromPoint(${x}, ${y}) || document.body;
+        el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: ${x}, clientY: ${y} }));
+        return true;
+      })()
+    `);
+    await new Promise((r) => setTimeout(r, 300));
+    const ignored = await win.webContents.executeJavaScript('document.body.dataset.mouseIgnored');
+    console.log(`[smoke] 指针 ${label} → 穿透=${ignored}`);
+  };
+  await probeMouse('卡片上', 300, 60);
+  await probeMouse('透明边', 4, 4);
+  await probeMouse('回卡片', 300, 60);
+
   // Esc 清空后应收回紧凑态（只有输入框）。
   await win.webContents.executeJavaScript(`
     (() => {

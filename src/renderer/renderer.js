@@ -390,4 +390,21 @@ window.launcher
 
 // 一加载就收成一行：窗口是按展开尺寸建的，等 launcher:shown 再收会闪一帧大空白。
 setCompact(true);
+
+/**
+ * 窗口四周留了一圈透明边给投影；那片区域不该吃鼠标。
+ * 指针在卡片上就正常接收，跑到透明边上就穿透给桌面。
+ * 穿透时用 forward，本进程仍能收到 mousemove，指针回到卡片会自动恢复。
+ */
+let ignoringMouse = null;
+document.addEventListener('mousemove', (event) => {
+  const onCard = event.target instanceof Node && launcherEl.contains(event.target);
+  const ignore = !onCard;
+  if (ignore === ignoringMouse) return;
+  ignoringMouse = ignore;
+  // 冒烟测试靠这个属性断言穿透状态，不依赖截图。
+  document.body.dataset.mouseIgnored = String(ignore);
+  window.launcher.setIgnoreMouse(ignore);
+});
+
 input.focus();
