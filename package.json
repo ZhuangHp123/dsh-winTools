@@ -7,10 +7,12 @@
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
+    "pack:win": "node scripts/pack.js",
     "test": "node --test \"test/*.test.js\"",
     "test:watch": "node --test --watch \"test/*.test.js\""
   },
   "devDependencies": {
-    "electron": "^45.3.4"
+    "electron": "^45.3.4",
+    "resedit": "^3.1.1"
   }
 }

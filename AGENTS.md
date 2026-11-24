@@ -12,6 +12,7 @@ Windows 启动器：热键唤起 → 搜应用 / 文件 / 剪贴板 → 回车�
 pnpm start                              # 启动
 node --test "test/*.test.js"            # 单测
 DSH_SMOKE=1 node node_modules/electron/cli.js .   # 界面冒烟（截图到 tmp/）
+pnpm pack:win                           # 打包绿色版 dist/dsh-winTools-win32-x64/dsh-winTools.exe
 ```
 
 ## Machine facts
@@ -53,6 +54,17 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .   # 界面冒烟（截图到 tmp
 - 窗口 `transparent: true` 时，外部工具（PowerShell `CopyFromScreen`）截屏拿不到画面；
   用 `webContents.capturePage()`（见 `src/main/smoke.js`）。
 - 热键 `Alt+Space` 本机可用（uTools 当时没跑）；注册失败时主进程会自动退到候选链。
+
+**打包相关：**
+- `scripts/pack.js` 解压官方运行时 zip 到 `dist/`，`resources/app/` 放源码，改名 exe，
+  再用纯 JS 的 `resedit`（devDependency）写图标与版本信息。完全离线，不碰 GitHub。
+- **zip 里的 `resources/default_app.asar` 必须跳过**：它和缓存原件是同一个硬链接，
+  Qoder CN 会长期锁住它（Restart Manager 查得到），一旦解压进 `dist/` 就再也删不掉、
+  改名不了。脚本用 `SKIP_ENTRIES` 跳过；目录仍被占时 `cleanOutDir` 降级为覆盖式构建。
+- 打包后 `__dirname` 在 `resources/app/src/main`，所以冒烟截图目录用 `process.cwd()/tmp`
+  而不是 `__dirname/../../tmp`（否则会写进安装目录）。
+- 验证 exe 能跑：`DSH_SMOKE=1 ./dist/dsh-winTools-win32-x64/dsh-winTools.exe`，
+  用打包后的二进制跑同一套界面检查。
 
 
 ## 工作区约定

@@ -40,7 +40,9 @@ function app_loginInfo() {
 }
 
 async function run({ app, win, query }) {
-  const outDir = path.join(__dirname, '../../tmp');
+  // 截图放仓库根的 tmp/。打包后 __dirname 在 resources/app 里，
+  // 按 __dirname 相对推会写进安装目录，所以用 cwd（冒烟都从仓库根发起）。
+  const outDir = process.env.DSH_SMOKE_OUT || path.join(process.cwd(), 'tmp');
   fs.mkdirSync(outDir, { recursive: true });
 
   const shot = async (name) => {

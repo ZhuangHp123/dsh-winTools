@@ -18,6 +18,24 @@ node --test "test/*.test.js"
 DSH_SMOKE=1 node node_modules/electron/cli.js .
 ```
 
+### 打包成 exe（免安装）
+
+```bash
+pnpm pack:win
+```
+
+产出 `dist/dsh-winTools-win32-x64/dsh-winTools.exe`，双击即启动；整个目录可以拷到
+别处/别的机器直接用，不需要 Node。绿色版：数据仍写 `%APPDATA%\dsh-wintools\`。
+
+打包不走 electron-builder（本机访问 GitHub 受限）：直接解压 Electron 官方免安装 zip，
+把 `src` / `assets` / `package.json` 放到 `resources/app/`，改名 exe，再用纯 JS 的
+`resedit` 写图标和版本信息。首次打包前 `pnpm install` 已经把运行时 zip 下到了
+`%LOCALAPPDATA%\electron\Cache`，脚本就从那里取。
+
+> 打包脚本会跳过 zip 里的 `resources/default_app.asar`：它和缓存原件是硬链接，
+> 而 Qoder 会长期锁住这个文件，一旦链进 dist 目录就再也删不掉。目录被占时脚本
+> 自动降级为覆盖式构建。
+
 > Node 24.22.3 便携版在 `D:\env\node-v24.22.3-win-x64`，已加入用户级 PATH
 > （新开终端直接可用）。镜像走 npmmirror，配置见 `.npmrc` / `pnpm-workspace.yaml`。
 > 环境细节与已知坑见 `AGENTS.md`。
@@ -41,23 +59,25 @@ DSH_SMOKE=1 node node_modules/electron/cli.js .
 | 空输入按 `↓` | 列出「最近使用」（最近真正打开过的条目） |
 | 托盘图标 | 显示搜索 / 自定义搜索前缀 / 开机启动 / 重新索引文件 / 登录钉钉 / 退出 |
 
-### 快捷前缀（英文首字母）
+### 快捷前缀（默认值）
 
-不想打中文时，用「单字母 + 空格」锁定范围，效果和写全名一样：
+每个范围只有一个前缀，默认都是英文首字母。输入「前缀 + 空格」即锁定范围，效果和写全名一样：
 
 | 前缀 | 锁定 | 示例 |
 | --- | --- | --- |
 | `a` | 应用 / 程序 | `a 微信` |
 | `p` | IDE 项目 | `p cfmoto` |
+| `web` | 网页（标签页 + 收藏夹） | `web 周报` |
 | `b` | 仅收藏夹书签 | `b 任务调度` |
 | `w` | 仅已打开的标签页 | `w 周报` |
+| `c` | 钉钉联系人 | `c 张三丰` |
+| `d` | 钉钉文档 | `d 需求` |
 | `f` | 文件 | `f 报价单` |
-| `c` / `dc` | 钉钉联系人（`dc` = dingtalk contact） | `c 张三丰` |
-| `dd` | 钉钉文档（dingtalk doc） | `dd 需求` |
 | `v` | 剪贴板 | `v token` |
 
-字母必须自成首词（后面跟空格）才生效：`b 淘宝` 锁定收藏夹，`b站` 仍按普通词搜索；
-单独输入 `b` 也不会变成空查询。`网页 xxx` 搜标签页 + 收藏夹，`b` / `w` 用来二选一。
+前缀必须自成首词（后面跟空格）才生效：`b 淘宝` 锁定收藏夹，`b站` 仍按普通词搜索；
+单独输入 `b` 也不会变成空查询。`web` 搜标签页 + 收藏夹，`b` / `w` 用来二选一。
+这些值都能在设置页改成中文或更长的词，见下节。
 
 热键可通过 `%APPDATA%\dsh-wintools\config.json` 的 `hotkey` 字段或环境变量
 `DSH_HOTKEY` 指定，例如 `{ "hotkey": "Ctrl+Alt+K" }`。
@@ -249,6 +269,7 @@ src/
 │   └── smoke.js      界面冒烟脚本（DSH_SMOKE=1）
 └── renderer/     搜索界面（HTML/CSS/JS，无框架）
 assets/           托盘与应用图标
+scripts/          pack.js：打包绿色版 exe
 test/             node:test 单元测试
 ```
 
