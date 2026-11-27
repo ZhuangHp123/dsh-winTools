@@ -170,6 +170,9 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       spellcheck: false,
+      // 窗口经常藏起来，隐藏时别节流渲染进程：唤起要立刻响应，
+      // 被节流的页面醒来再重绘正是"卡顿一下"的来源之一。
+      backgroundThrottling: false,
     },
   });
 

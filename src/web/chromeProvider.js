@@ -26,6 +26,9 @@ const { execFile } = require('node:child_process');
 /** UIA 单次枚举的默认超时：PowerShell 冷启动就要 ~1s。 */
 const UIA_TIMEOUT = 8000;
 
+/** 唤起后补刷标签页的延后时间：先让窗口完成首帧，再起 PowerShell。 */
+const RESUME_REFRESH_DELAY = 500;
+
 /** 历史库补 URL 时扫描的最近记录条数。 */
 const HISTORY_LOOKUP_LIMIT = 8000;
 
@@ -752,7 +755,11 @@ function createChromeProvider(options = {}) {
   let chromePath = null;
   let timer = null;
   let refreshing = false;
+  /** 唤起后延后补刷的一次性定时器。 */
+  let resumeTimer = null;
   let lastError = null;
+  /** 最近一次标签页刷新开始的时间。唤起时的刷新按它限频，别每次 show 都起 PowerShell。 */
+  let lastTabsRefresh = 0;
   const errors = [];
 
   /**
@@ -761,6 +768,7 @@ function createChromeProvider(options = {}) {
    */
   function refreshTabs() {
     if (refreshing) return refreshing;
+    lastTabsRefresh = Date.now();
     refreshing = (async () => {
       try {
         const tabs = await listTabs(options);
@@ -908,16 +916,33 @@ function createChromeProvider(options = {}) {
     /** 窗口隐藏时暂停定时刷新：每次枚举都要起 PowerShell，常驻后台纯属白烧。 */
     pausePolling() {
       stopPolling();
+      if (resumeTimer) {
+        clearTimeout(resumeTimer);
+        resumeTimer = null;
+      }
     },
 
-    /** 窗口唤起时恢复定时刷新，并立刻补一轮（标题可能已经变了）。 */
+    /**
+     * 窗口唤起时恢复定时刷新，并按需补一轮（标题可能已经变了）。
+     * 补的这轮限频且延后：pwsh 冷启动要几百毫秒，和窗口首帧抢 CPU 会造成
+     * 可见卡顿，所以（1）刚刷过就不刷；（2）要刷也等窗口先画出来再刷。
+     */
     resumePolling() {
       startPolling();
-      if (refreshInterval > 0) refreshTabs().catch(() => {});
+      if (refreshInterval <= 0 || resumeTimer) return;
+      if (Date.now() - lastTabsRefresh < refreshInterval) return;
+      resumeTimer = setTimeout(() => {
+        resumeTimer = null;
+        refreshTabs().catch(() => {});
+      }, RESUME_REFRESH_DELAY);
     },
 
     dispose() {
       stopPolling();
+      if (resumeTimer) {
+        clearTimeout(resumeTimer);
+        resumeTimer = null;
+      }
     },
   };
 
