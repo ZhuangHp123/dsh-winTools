@@ -215,12 +215,24 @@ function positionWindow() {
   win.setPosition(x, y);
 }
 
-function showWindow() {
+async function showWindow() {
   if (!win) return;
   positionWindow();
+  // 先把界面清回"空搜索栏"再显示：win.show() 会立即把渲染进程当前画面合成出来，
+  // 上一轮结果若还在 DOM 里就会闪一帧旧内容。等渲染层确认清完（下一帧已提交）
+  // 再 show；渲染层万一卡住，150ms 兜底照常显示，别让唤起变成没反应。
+  const cleared = new Promise((resolve) => {
+    const timer = setTimeout(resolve, 150);
+    ipcMain.once('launcher:shown-applied', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  win.webContents.send('launcher:shown');
+  await cleared;
+  if (!win || win.isDestroyed()) return;
   win.show();
   win.focus();
-  win.webContents.send('launcher:shown');
   // 标签页变化频繁，唤起时顺手刷一轮，避免搜到过期标题；
   // 顺带把隐藏期间停掉的定时刷新恢复。
   chromeProvider?.resumePolling?.();
@@ -228,12 +240,12 @@ function showWindow() {
 
 /**
  * 从托盘「自定义搜索前缀…」唤起设置页。
- * 必须等界面收完 launcher:shown（它会清空输入并收回紧凑态）再发，
- * 否则两条消息竞争，设置页刚打开就被复位。
+ * 等 showWindow 走完（渲染层已复位并显示）再发打开指令，否则两条消息竞争，
+ * 设置页刚打开就被复位。
  */
-function openSettingsWindow() {
+async function openSettingsWindow() {
   if (!win) return;
-  showWindow();
+  await showWindow();
   win.webContents.send('launcher:openSettings');
   if (!win.isVisible()) win.show();
   win.focus();

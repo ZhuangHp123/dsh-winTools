@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('launcher', {
     ipcRenderer.on('launcher:shown', handler);
     return () => ipcRenderer.removeListener('launcher:shown', handler);
   },
+  // 渲染层清完上一轮结果、下一帧画完后回报，主进程收到才真正显示窗口。
+  shownApplied: () => ipcRenderer.send('launcher:shown-applied'),
   onOpenSettings: (callback) => {
     const handler = () => callback();
     ipcRenderer.on('launcher:openSettings', handler);

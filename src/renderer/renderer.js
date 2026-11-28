@@ -695,6 +695,9 @@ window.launcher.onShown(() => {
     applyPrefixConfig(next);
     renderStatus();
   });
+  // 这一帧画完再回报主进程，主进程才把窗口显示出来——
+  // 否则窗口会先把上一轮的搜索结果闪出来，再变回空搜索栏。
+  requestAnimationFrame(() => window.launcher.shownApplied());
 });
 
 window.launcher.onStatus((next) => {
